@@ -506,14 +506,14 @@ export default function PortfolioPage() {
                   .filter(i => i.twrr != null)
               ].map(item=>{
                 const maxT   = Math.max(portfolioTwrr,...indexComparison.map(i=>compPeriod==='2020'?i.twrr2020??0:i.twrr??0).filter(Boolean));
-                const barPct = Math.max(4,Math.round((item.twrr/maxT)*100));
-                const alpha  = item.highlight?null:portfolioTwrr-item.twrr;
+                const barPct = Math.max(4,Math.round(((item.twrr??0)/maxT)*100));
+                const alpha  = item.highlight?null:portfolioTwrr-(item.twrr??0);
                 return (
                   <div key={item.name} className={`rounded-xl p-3 border ${item.highlight?'border-emerald-500/50 bg-emerald-500/10':'border-slate-700 bg-slate-800/50'}`}>
                     <div className="text-xs font-semibold text-slate-400 mb-0.5 truncate">{item.name}</div>
                     {item.name==='Midcap 150'&&compPeriod==='inception'&&<div className="text-[9px] text-amber-600/70 mb-0.5">NSE back-calc from 2015</div>}
                     <div className={`text-xl font-bold mb-0.5 ${item.highlight?'text-emerald-400':'text-blue-400'}`}>
-                      {item.twrr>=0?'+':''}{item.twrr.toFixed(2)}%
+                      {(item.twrr??0)>=0?'+':''}{(item.twrr??0).toFixed(2)}%
                     </div>
                     <div className="text-xs text-slate-500 mb-2">Annualised</div>
                     <div className="h-1.5 bg-slate-700 rounded-full mb-2">
@@ -524,6 +524,7 @@ export default function PortfolioPage() {
                         {alpha>=0?'+':''}{alpha.toFixed(2)}% vs portfolio
                       </div>
                     )}
+
                   </div>
                 );
               })}
