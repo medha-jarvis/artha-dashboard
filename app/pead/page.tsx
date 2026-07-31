@@ -4,19 +4,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, TrendingUp, TrendingDown, Zap, RefreshCw, AlertCircle } from 'lucide-react';
 
-// ── Supabase config (public anon key — safe to expose) ──────────────────────
-const SB_URL  = 'https://jljwgwftuqrabfyiucfl.supabase.co';
-const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
-
-const sbFetch = (path: string) =>
-  fetch(`${SB_URL}/rest/v1/${path}`, {
-    headers: {
-      apikey: SB_KEY,
-      Authorization: `Bearer ${SB_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    cache: 'no-store',
-  }).then(r => r.json());
+// Data comes from the VPS backend via the existing /api/proxy/ route.
+// Signals already include drift columns joined server-side.
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Signal {
@@ -158,19 +147,20 @@ export default function PEADPage() {
   const loadData = async () => {
     setLoading(true); setError('');
     try {
-      const [rawSignals, rawDrift] = await Promise.all([
-        sbFetch('pead_signals?select=*&order=signal_date.desc&limit=100'),
-        sbFetch('drift_performance?select=*'),
-      ]);
+      // Signals come back from the VPS with drift columns joined server-side
+      const raw = await fetch('/api/proxy/pead/signals', { cache: 'no-store' }).then(r => r.json());
+      if (!Array.isArray(raw)) throw new Error('Bad response from API');
 
-      if (!Array.isArray(rawSignals)) throw new Error('Bad response from Supabase');
-
-      type DriftWithId = DriftRow & { signal_id: string };
-      // Join drift data onto signals
-      const driftMap = Object.fromEntries(
-        ((rawDrift || []) as DriftWithId[]).map((d) => [d.signal_id, d])
-      );
-      const joined = rawSignals.map(s => ({ ...s, drift_performance: driftMap[s.id] }));
+      // Flatten drift columns into drift_performance sub-object for reuse in components
+      const joined: Signal[] = raw.map((s: Signal & { t_1_return?: number | null; t_5_return?: number | null; t_20_return?: number | null; drift_updated_at?: string }) => ({
+        ...s,
+        drift_performance: {
+          t_1_return:  s.t_1_return  ?? null,
+          t_5_return:  s.t_5_return  ?? null,
+          t_20_return: s.t_20_return ?? null,
+          updated_at:  s.drift_updated_at ?? '',
+        },
+      }));
       setSignals(joined);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load');
@@ -181,15 +171,11 @@ export default function PEADPage() {
 
   useEffect(() => { loadData(); }, []);
 
-  // Split into live (today / recent active) vs history
-  const today = new Date().toISOString().slice(0, 10);
+  // Split into live (active) vs history
   const liveSignals = signals.filter(s => s.status === 'active');
-  const histSignals = signals.filter(s => s.status !== 'active' || s.signal_date < today);
   const pathALive   = liveSignals.filter(s => s.trigger_path === 'A');
   const pathBLive   = liveSignals.filter(s => s.trigger_path === 'B');
-
-  // Aggregate drift stats
-  const completedSignals = signals.filter(s => s.drift_performance?.t_20_return != null);
+  const completedCount = signals.filter(s => s.drift_performance?.t_20_return != null).length;
   const avgReturn = (col: keyof DriftRow) => {
     const vals = signals
       .map(s => s.drift_performance?.[col] as number | null)
@@ -317,7 +303,7 @@ export default function PEADPage() {
           <div className="bg-slate-900 border border-slate-800 rounded-xl">
             <div className="p-4 border-b border-slate-800 flex items-center justify-between">
               <h2 className="text-sm font-bold text-white">Historical Drift Performance</h2>
-              <span className="text-xs text-slate-500">{completedSignals.length} completed (T+20 measured)</span>
+              <span className="text-xs text-slate-500">{completedCount} completed (T+20 measured)</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse" style={{ minWidth: '700px' }}>
