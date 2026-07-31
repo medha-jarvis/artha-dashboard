@@ -1,0 +1,6 @@
+{
+  "env": {
+    "API_BASE_URL": "http://31.97.227.135/api",
+    "NEXT_PUBLIC_API_BASE_URL": "http://31.97.227.135/api"
+  }
+}
