@@ -1,0 +1,6 @@
+supabase==2.15.0
+yfinance==0.2.54
+playwright==1.49.0
+pandas==2.2.3
+requests==2.32.3
+numpy==2.0.2

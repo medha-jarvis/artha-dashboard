@@ -389,6 +389,7 @@ export default function PortfolioPage() {
             </button>
             <Link href="/portfolio/sectors"   className="px-3 py-1.5 bg-blue-600   hover:bg-blue-700   text-white rounded text-xs font-medium">Sectors</Link>
             <Link href="/portfolio/analytics" className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs font-medium">Analytics</Link>
+            <Link href="/pead" className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold flex items-center gap-1">⚡ PEAD</Link>
             <button disabled className="px-3 py-1.5 bg-gradient-to-r from-blue-600/50 to-purple-600/50 text-white/50 rounded text-xs font-semibold cursor-not-allowed">📊 Thesis Tracker</button>
           </div>
         </div>
