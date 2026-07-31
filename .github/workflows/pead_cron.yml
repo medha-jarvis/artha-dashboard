@@ -2,39 +2,56 @@ name: PEAD Engine
 
 on:
   schedule:
-    - cron: '15 10 * * 1-5'   # pead_engine  — 10:15 UTC = 3:45 PM IST
-    - cron: '45 10 * * 1-5'   # drift_tracker — 10:45 UTC = 4:15 PM IST
-  workflow_dispatch:
+    # pead_engine.py  — 10:15 UTC = 3:45 PM IST (30 min after NSE close)
+    - cron: '15 10 * * 1-5'
+    # drift_tracker.py — 10:45 UTC = 4:15 PM IST
+    - cron: '45 10 * * 1-5'
+  workflow_dispatch:           # allow manual trigger from GitHub Actions UI
     inputs:
       script:
-        description: 'Script to run'
+        description: 'Which script to run'
         required: true
         default: 'pead_engine'
         type: choice
-        options: [pead_engine, drift_tracker]
+        options:
+          - pead_engine
+          - drift_tracker
 
 jobs:
   pead-engine:
     name: PEAD Engine (3:45 PM IST)
     runs-on: ubuntu-latest
+    # Run at 10:15 UTC OR when manually triggered with pead_engine
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '15 10 * * 1-5') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.script == 'pead_engine')
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: pip
+          cache: 'pip'
           cache-dependency-path: scripts/requirements.txt
-      - run: pip install -r scripts/requirements.txt
-      - run: playwright install chromium --with-deps
-      - run: python scripts/pead_engine.py
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Run PEAD engine
         env:
-          VPS_API_URL:         ${{ secrets.VPS_API_URL }}
-          VPS_API_KEY:         ${{ secrets.VPS_API_KEY }}
+          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:        ${{ secrets.SUPABASE_KEY }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/pead_engine.py
 
   drift-tracker:
     name: Drift Tracker (4:15 PM IST)
@@ -42,15 +59,25 @@ jobs:
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '45 10 * * 1-5') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.script == 'drift_tracker')
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: pip
+          cache: 'pip'
           cache-dependency-path: scripts/requirements.txt
-      - run: pip install -r scripts/requirements.txt
-      - run: python scripts/drift_tracker.py
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Run drift tracker
         env:
-          VPS_API_URL:  ${{ secrets.VPS_API_URL }}
-          VPS_API_KEY:  ${{ secrets.VPS_API_KEY }}
+          SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/drift_tracker.py

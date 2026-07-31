@@ -1,3 +1,4 @@
+supabase==2.15.0
 yfinance==0.2.54
 playwright==1.49.0
 pandas==2.2.3
