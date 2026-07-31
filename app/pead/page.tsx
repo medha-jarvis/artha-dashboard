@@ -150,10 +150,12 @@ function ReturnPill({ val, label }: { val: number | null; label: string }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function PEADPage() {
-  const [signals, setSignals] = useState<Signal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const [tab,     setTab]     = useState<'live' | 'history'>('live');
+  const [signals,    setSignals]    = useState<Signal[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+  const [tab,        setTab]        = useState<'live' | 'history'>('live');
+  const [triggering, setTriggering] = useState(false);
+  const [trigMsg,    setTrigMsg]    = useState('');
 
   const loadData = async () => {
     setLoading(true); setError('');
@@ -180,6 +182,27 @@ export default function PEADPage() {
   };
 
   useEffect(() => { loadData(); }, []);
+
+  const runEngine = async (script: 'pead_engine' | 'drift_tracker' = 'pead_engine') => {
+    setTriggering(true); setTrigMsg('');
+    try {
+      const r = await fetch('/api/proxy/pead/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setTrigMsg(`✓ ${script === 'pead_engine' ? 'Engine' : 'Drift tracker'} dispatched — results appear in ~5 min`);
+      } else {
+        setTrigMsg(`✗ ${d.error || 'Trigger failed'}`);
+      }
+    } catch (e: unknown) {
+      setTrigMsg(`✗ ${e instanceof Error ? e.message : 'Network error'}`);
+    } finally {
+      setTriggering(false);
+    }
+  };
 
   // Split into live (today / recent active) vs history
   const today = new Date().toISOString().slice(0, 10);
@@ -217,15 +240,34 @@ export default function PEADPage() {
               Post-Earnings Announcement Drift · Path A = VCP beat · Path B = Trap reversal
             </p>
           </div>
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-medium disabled:opacity-50 transition"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Run engine — triggers GitHub Actions workflow */}
+            <button
+              onClick={() => runEngine('pead_engine')}
+              disabled={triggering}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold disabled:opacity-50 transition"
+            >
+              <Zap className={`w-3.5 h-3.5 ${triggering ? 'animate-pulse' : ''}`} />
+              {triggering ? 'Dispatching…' : 'Run Engine'}
+            </button>
+            {/* Re-fetch data from Supabase */}
+            <button
+              onClick={loadData}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-medium disabled:opacity-50 transition"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh Data
+            </button>
+          </div>
         </div>
+
+        {/* Trigger status message */}
+        {trigMsg && (
+          <div className={`text-xs px-4 py-2.5 rounded-lg border ${trigMsg.startsWith('✓') ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-red-900/30 border-red-700/40 text-red-300'}`}>
+            {trigMsg}
+          </div>
+        )}
 
         {/* Error */}
         {error && (
