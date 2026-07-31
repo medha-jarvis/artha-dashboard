@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { TrendingUp, TrendingDown, RefreshCw, BarChart2, PieChart, Target, BookOpen, Eye, Wallet } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, BarChart2, PieChart, Target, BookOpen, Eye, Wallet, Zap } from 'lucide-react';
 
 const fmtAbs = (n: number) =>
   Math.abs(n) >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr`
@@ -40,6 +40,16 @@ const NAV_CARDS = [
     badgeColor: 'bg-emerald-500/20 text-emerald-300',
   },
   {
+    href: '/pead',
+    icon: Zap,
+    title: 'PEAD Engine',
+    description: 'Post-earnings drift signals — Path A (VCP beat) & Path B (trap reversal) with T+1/T+5/T+20 drift tracking',
+    color: 'from-amber-600/20 to-amber-800/10 border-amber-500/30 hover:border-amber-400/50',
+    iconColor: 'text-amber-400',
+    badge: 'Live',
+    badgeColor: 'bg-amber-500/20 text-amber-300',
+  },
+  {
     href: '#',
     icon: Target,
     title: 'Goals',
@@ -64,16 +74,6 @@ const NAV_CARDS = [
     icon: BookOpen,
     title: 'Research',
     description: 'Stock analysis, thesis tracker, smart money moves',
-    color: 'from-amber-600/20 to-amber-800/10 border-amber-500/30 hover:border-amber-400/50',
-    iconColor: 'text-amber-400',
-    badge: 'Soon',
-    badgeColor: 'bg-amber-500/20 text-amber-300',
-  },
-  {
-    href: '#',
-    icon: PieChart,
-    title: 'Allocation',
-    description: 'Asset allocation across equity, debt, gold, real estate',
     color: 'from-rose-600/20 to-rose-800/10 border-rose-500/30 hover:border-rose-400/50',
     iconColor: 'text-rose-400',
     badge: 'Soon',
