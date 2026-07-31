@@ -345,7 +345,7 @@ export default function PortfolioPage() {
   const xInt = navRange==='1yr'?1:navRange==='3yr'?5:11;
 
   const Th = ({col,label,left}:{col:SortColumn;label:string;left?:boolean}) => (
-    <th className={`${left?'text-left':'text-right'} px-2 py-2 text-xs font-medium text-slate-400 cursor-pointer hover:text-white whitespace-nowrap select-none`}
+    <th className={`${left?'text-left':'text-right'} px-2 py-2 text-xs font-medium text-slate-400 cursor-pointer hover:text-white whitespace-nowrap select-none bg-slate-900`}
       onClick={()=>handleSort(col)}>
       {label}{sortCol===col?(sortDir==='asc'?' ▲':' ▼'):''}
     </th>
@@ -638,11 +638,11 @@ export default function PortfolioPage() {
             <h2 className="text-base font-bold text-white">Holdings — Stock-wise IRR &amp; Valuation</h2>
             <div className="text-xs text-slate-500 hidden sm:block">Click headers to sort</div>
           </div>
-          <div className="overflow-x-auto -mx-1">
+          <div className="overflow-x-auto overflow-y-auto -mx-1" style={{maxHeight:'min(680px, calc(100vh - 200px))'}}>
             <table className="w-full text-xs border-collapse" style={{minWidth:'2100px'}}>
-              <thead>
-                <tr className="border-b border-slate-700">
-                  <th className="sticky left-0 bg-slate-900 text-left px-2 py-2 text-xs font-medium text-slate-400 cursor-pointer hover:text-white whitespace-nowrap z-10"
+              <thead className="sticky top-0 z-20">
+                <tr className="border-b-2 border-slate-600">
+                  <th className="sticky left-0 bg-slate-900 text-left px-2 py-2.5 text-xs font-semibold text-slate-300 cursor-pointer hover:text-white whitespace-nowrap z-30"
                     onClick={()=>handleSort('stock')}>
                     Stock{sortCol==='stock'?(sortDir==='asc'?' ▲':' ▼'):''}
                   </th>
