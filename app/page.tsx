@@ -103,7 +103,7 @@ const fmtScore = (v: number | null) => v == null ? '—' : String(v);
 
 type SortKey = 'badge_priority' | 'total_score' | 'ttm_return' | 'earliest_date';
 type SortDir = 'asc' | 'desc';
-type FilterMode = 'all' | 'triple' | 'exit' | 'turnaround' | 'catalyst';
+type FilterMode = 'all' | 'multi' | 'triple' | 'exit' | 'turnaround' | 'catalyst' | 'pead_only' | 's2_only' | 'ins_buy' | 'ins_sell';
 
 // ── Sortable Th ────────────────────────────────────────────────────────────────
 function Th({ col, label, right, active, dir, onSort }:
@@ -224,7 +224,7 @@ export default function ConfluenceHub() {
         if (!existing || r.insider_score > existing.insider_score) insMap.set(r.ticker, r);
       });
 
-      // Build trinity — only tickers in ≥2 databases
+      // Build idea list — ALL tickers from ANY pipeline (1, 2, or 3 engines)
       const allTickers = new Set([...peadMap.keys(), ...s2Map.keys(), ...insMap.keys()]);
       const rows: Trinity[] = [];
 
@@ -233,7 +233,7 @@ export default function ConfluenceHub() {
         const s2      = s2Map.get(ticker);
         const insider = insMap.get(ticker);
         const count   = [pead, s2, insider].filter(Boolean).length;
-        if (count < 2) continue;
+        // Include ALL — no minimum count filter
 
         const dates = [pead?.signal_date, s2?.signal_date, insider?.signal_date].filter(Boolean) as string[];
         const earliest = dates.sort()[0];
@@ -285,13 +285,18 @@ export default function ConfluenceHub() {
     finally { setTriggering(null); }
   };
 
-  // Filter
+  // Filter — pipeline-based
   const filtered = useMemo(() => {
     const withBadge = trinity.map(t => ({ ...t, badge: getBadge(t) }));
     if (filter === 'triple')     return withBadge.filter(t => t.badge.label === 'TRIPLE PLAY');
     if (filter === 'exit')       return withBadge.filter(t => t.badge.label === 'SMART MONEY EXIT');
     if (filter === 'turnaround') return withBadge.filter(t => t.badge.label === 'EARNINGS TURNAROUND');
     if (filter === 'catalyst')   return withBadge.filter(t => t.badge.label === 'HIDDEN CATALYST');
+    if (filter === 'pead_only')  return withBadge.filter(t => t.pead_score != null);
+    if (filter === 's2_only')    return withBadge.filter(t => t.stage2_score != null);
+    if (filter === 'ins_buy')    return withBadge.filter(t => t.insider_score != null && t.insider_type === 'BUY');
+    if (filter === 'ins_sell')   return withBadge.filter(t => t.insider_score != null && t.insider_type === 'SELL');
+    if (filter === 'multi')      return withBadge.filter(t => t.signals_count >= 2);
     return withBadge;
   }, [trinity, filter]);
 
@@ -325,6 +330,7 @@ export default function ConfluenceHub() {
 
   const tripleCount  = trinity.filter(t => getBadge(t).label === 'TRIPLE PLAY').length;
   const exitCount    = trinity.filter(t => getBadge(t).label === 'SMART MONEY EXIT').length;
+  const multiCount   = trinity.filter(t => t.signals_count >= 2).length;
 
   return (
     <div className="min-h-screen bg-[#0d1117] p-3 md:p-5">
@@ -374,11 +380,16 @@ export default function ConfluenceHub() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 flex-wrap">
             {([
-              ['all',         '🔭 All Confluences'],
-              ['triple',      '🔥 Triple Play'],
-              ['exit',        '⚠️ Smart Money Exit'],
-              ['turnaround',  '⚡ Earnings Turnaround'],
-              ['catalyst',    '🚀 Hidden Catalyst'],
+              ['all',        '🔭 All Ideas'],
+              ['multi',      '🔗 Multi-Engine (2+)'],
+              ['triple',     '🔥 Triple Play'],
+              ['exit',       '⚠️ Smart Money Exit'],
+              ['turnaround', '⚡ Earnings Turnaround'],
+              ['catalyst',   '🚀 Hidden Catalyst'],
+              ['pead_only',  '⚡ PEAD'],
+              ['s2_only',    '🏔️ Stage 2'],
+              ['ins_buy',    '🕵️ Insider BUY'],
+              ['ins_sell',   '🕵️ Insider SELL'],
             ] as [FilterMode, string][]).map(([v,l]) => (
               <button key={v} onClick={() => setFilter(v)}
                 className={`px-3 py-1 text-xs rounded font-medium transition whitespace-nowrap ${filter===v?'bg-slate-600 text-white':'text-slate-400 hover:text-white'}`}>
@@ -395,8 +406,8 @@ export default function ConfluenceHub() {
         ) : sorted.length === 0 ? (
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-16 text-center">
             <span className="text-4xl mb-4 block">🔭</span>
-            <p className="text-slate-400 font-semibold">No cross-engine confluences yet</p>
-            <p className="text-slate-600 text-xs mt-1">Run all three engines to detect Trinity setups</p>
+            <p className="text-slate-400 font-semibold">No ideas in this view</p>
+            <p className="text-slate-600 text-xs mt-1">Try "All Ideas" or run the engines to populate data</p>
           </div>
         ) : (
           <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
@@ -533,7 +544,7 @@ export default function ConfluenceHub() {
               </table>
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} confluences · 🔥 Triple Play = all 3 engines + Insider BUY · ⚠️ Exit = insider SELL against bullish signal</span>
+              <span>{sorted.length} ideas · 🔗 Multi = 2+ engines · 🔥 Triple Play = all 3 + Insider BUY · ⚠️ Exit = insider SELL on bullish setup</span>
               <span>TTM = return since earliest signal · TV = TradingView · SCR = Screener.in</span>
             </div>
           </div>
