@@ -2,10 +2,10 @@ name: Stage 2 Engine
 
 on:
   schedule:
-    # stage2_engine: 11:30 UTC = 5:00 PM IST (after market close + drift trackers)
-    - cron: '30 11 * * 1-5'
-    # stage2_tracker: 11:50 UTC = 5:20 PM IST (after engine finishes)
-    - cron: '50 11 * * 1-5'
+    # stage2_engine:  10:15 UTC = 3:45 PM IST (right after market close)
+    - cron: '15 10 * * 1-5'
+    # stage2_tracker: 10:45 UTC = 4:15 PM IST
+    - cron: '45 10 * * 1-5'
   workflow_dispatch:
     inputs:
       script:
@@ -17,11 +17,11 @@ on:
 
 jobs:
   stage2-engine:
-    name: Stage 2 Engine (5:00 PM IST)
+    name: Stage 2 Engine (3:45 PM IST)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '30 11 * * 1-5') ||
+      (github.event_name == 'schedule' && github.event.schedule == '15 10 * * 1-5') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.script == 'stage2_engine')
     steps:
       - uses: actions/checkout@v4
@@ -30,16 +30,16 @@ jobs:
       - run: pip install -r scripts/requirements.txt
       - run: python scripts/stage2_engine.py
         env:
-          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:        ${{ secrets.SUPABASE_ANON_KEY }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:       ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
 
   stage2-tracker:
-    name: Stage 2 Tracker (5:20 PM IST)
+    name: Stage 2 Tracker (4:15 PM IST)
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '50 11 * * 1-5') ||
+      (github.event_name == 'schedule' && github.event.schedule == '45 10 * * 1-5') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.script == 'stage2_tracker')
     steps:
       - uses: actions/checkout@v4

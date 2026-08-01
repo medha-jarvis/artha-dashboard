@@ -261,12 +261,13 @@ def get_pead_high_scorers() -> set[str]:
 # ── Supabase upsert ───────────────────────────────────────────────────────────
 def upsert_signal(ticker: str, metrics: dict, score: int, tier: str,
                   company_name: str | None, sector: str | None,
-                  is_pead: bool, is_smd: bool) -> str | None:
+                  is_pead: bool, is_smd: bool,
+                  signal_date_override: str | None = None) -> str | None:
     row = {
         "ticker":                    ticker,
         "company_name":              company_name,
         "sector":                    sector,
-        "signal_date":               TODAY,
+        "signal_date":               signal_date_override or TODAY,
         "stage2_score":              score,
         "days_in_stage2":            metrics["days_in_stage2"],
         "ema150_distance_pct":       metrics["ema150_distance_pct"],
@@ -299,12 +300,12 @@ def send_telegram(confirmed: list[dict], triple_plays: list[dict]) -> None:
         return
     lines = [f"📊 *Stage 2 Scan — {dt.now().strftime('%d %b %Y')}*"]
     if triple_plays:
-        lines.append(f"\n🔥 *Triple Play Setups ({len(triple_plays)})*")
+        lines.append(f"\n🔥 *PEAD Confluence ({len(triple_plays)}) — earnings catalyst + S2 breakout*")
         for s in triple_plays[:5]:
-            lines.append(f"  ⭐ *{s['ticker']}* score={s['score']} | {s['days']}d in S2 | +{s['ema_dist']:.1f}% above EMA")
+            lines.append(f"  ⭐ *{s['ticker']}* score={s['score']} | {s['days']}d in S2 | +{s['ema_dist']:.1f}% above EMA150")
     if confirmed:
-        lines.append(f"\n🟢 *CONFIRMED (≥75) — {len(confirmed)} stocks*")
-        for s in confirmed[:5]:
+        lines.append(f"\n🟢 *High Conviction (≥75) — {len(confirmed)} stocks*")
+        for s in confirmed[:8]:
             lines.append(f"  *{s['ticker']}* score={s['score']} | {s['days']}d | vol {s['vol']:.1f}x")
     try:
         requests.post(
@@ -383,18 +384,23 @@ def main():
         except Exception:
             company_name = sector = None
 
-        sig_id = upsert_signal(ticker, metrics, score, tier, company_name, sector, is_pead, is_smd)
+        # Only store stocks scoring >= 55
+        sig_id = None
+        if score >= 55:
+            sig_id = upsert_signal(ticker, metrics, score, tier, company_name, sector, is_pead, is_smd)
 
-        flag = " 🔥TRIPLE PLAY" if is_pead and tier != "NONE" else ""
-        print(f"→ score={score} tier={tier} days={metrics['days_in_stage2']} vol={metrics['volume_multiplier']:.1f}x{flag}")
+        flag = " 🔥TRIPLE PLAY" if is_pead and score >= 55 else ""
+        stored = "✓" if sig_id else ("skip<55" if score < 55 else "✗db")
+        print(f"→ score={score} tier={tier} days={metrics['days_in_stage2']} vol={metrics['volume_multiplier']:.1f}x [{stored}]{flag}")
         processed += 1
 
-        if tier == "CONFIRMED":
-            d = {"ticker": ticker, "score": score, "days": metrics["days_in_stage2"],
-                 "ema_dist": metrics["ema150_distance_pct"], "vol": metrics["volume_multiplier"]}
+        d = {"ticker": ticker, "score": score, "days": metrics["days_in_stage2"],
+             "ema_dist": metrics["ema150_distance_pct"], "vol": metrics["volume_multiplier"]}
+        # Telegram: alert if score >= 75 OR pead_confluence
+        if score >= 75:
             confirmed.append(d)
-            if is_pead:
-                triple_plays.append(d)
+        if is_pead and score >= 55:
+            triple_plays.append(d)
 
     print(f"\n[done] {processed}/{len(tickers)} qualified for Stage 2 | {len(confirmed)} CONFIRMED | {len(triple_plays)} Triple Plays")
     send_telegram(confirmed, triple_plays)

@@ -14,18 +14,23 @@ export async function POST(req: NextRequest) {
     const body   = await req.json().catch(() => ({}));
     const script = (body.script as string) || 'stage2_engine';
 
+    const isBackfill   = script === 'backfill_stage2';
+    const workflowFile = isBackfill ? 'backfill_stage2.yml' : 'stage2_cron.yml';
+    const inputs       = isBackfill ? { days: '7' } : { script };
+
     const ghRes = await fetch(
-      `https://api.github.com/repos/${REPO}/actions/workflows/stage2_cron.yml/dispatches`,
+      `https://api.github.com/repos/${REPO}/actions/workflows/${workflowFile}/dispatches`,
       {
         method: 'POST',
         headers: GH_HEADERS,
-        body: JSON.stringify({ ref: 'main', inputs: { script } }),
+        body: JSON.stringify({ ref: 'main', inputs }),
         signal: AbortSignal.timeout(15000),
       }
     );
 
     if (ghRes.status === 204) {
-      const label = script === 'stage2_tracker' ? 'Return tracker' : 'Stage 2 scan';
+      const label = isBackfill ? 'Stage 2 Backfill (7 days)' :
+                    script === 'stage2_tracker' ? 'Return tracker' : 'Stage 2 scan';
       return NextResponse.json({ ok: true, message: `${label} dispatched` });
     }
     const err = await ghRes.text();
