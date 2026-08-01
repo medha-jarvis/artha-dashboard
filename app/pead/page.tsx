@@ -339,7 +339,8 @@ export default function PEADPage() {
                     const gapStr = gap == null ? '—'
                       : gap > 0 ? `📈 +${gap.toFixed(1)}%` : `📉 ${gap.toFixed(1)}%`;
 
-                    const stockscanUrl = `https://stockscans.in/stock/${sig.ticker.replace('.NS','')}`;
+                    const sym = sig.ticker.replace('.NS','');
+                    const stockscanUrl = `https://www.screener.in/company/${sym}/`;
 
                     return (
                       <tr key={sig.id} className={`border-b border-slate-800/50 transition-colors ${rowBg}`}>

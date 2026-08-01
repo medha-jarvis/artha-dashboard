@@ -374,7 +374,7 @@ export default function Stage2Page() {
                       <tr key={sig.id} className={`border-b border-slate-800/50 transition-colors ${rowBg}`}>
                         {/* Ticker + badges */}
                         <td className="px-3 py-2.5 sticky left-0 z-10 whitespace-nowrap" style={{ backgroundColor: stkBg }}>
-                          <a href={`https://stockscans.in/stock/${sym}`} target="_blank" rel="noopener noreferrer"
+                          <a href={`https://www.screener.in/company/${sym}/`} target="_blank" rel="noopener noreferrer"
                             className="font-bold text-white hover:text-blue-400 transition text-sm">{sym}</a>
                           {sig.company_name && (
                             <div className="text-slate-500 text-[10px] truncate max-w-[140px]">{sig.company_name}</div>
@@ -439,7 +439,7 @@ export default function Stage2Page() {
 
                         {/* Quick actions */}
                         <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
-                          <a href={`https://www.tradingview.com/chart/?symbol=NSE:${sym}`}
+                          <a href={`https://in.tradingview.com/symbols/NSE-${sym}/`}
                             target="_blank" rel="noopener noreferrer"
                             title="Open in TradingView"
                             className="inline-flex items-center gap-0.5 text-[10px] text-slate-500 hover:text-blue-400 transition px-1.5 py-0.5 rounded border border-slate-700 hover:border-blue-500">
