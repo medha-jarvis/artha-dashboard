@@ -92,7 +92,7 @@ export default function InsiderPage() {
             <button key={v} onClick={()=>setF(v)} className={`px-3 py-1 text-xs rounded font-medium transition ${filter===v?'bg-violet-600 text-white':'text-slate-400 hover:text-white'}`}>{l}</button>
           ))}
         </div>
-        {loading?<div className="text-center py-20 text-slate-500 text-sm">Loading…</div>:sorted.length===0?<div className="bg-slate-900 border border-slate-800 rounded-xl p-16 text-center"><Eye className="w-8 h-8 text-slate-600 mx-auto mb-3"/><p className="text-slate-400 font-semibold">No insider signals yet</p><p className="text-slate-600 text-xs mt-1">Run the engine to fetch NSE PIT data</p><button onClick={dispatch} disabled={triggering} className="mt-4 px-4 py-2 bg-violet-700 text-white rounded text-xs font-medium">⚡ Run Engine</button></div>:(
+        {loading?<div className="text-center py-20 text-slate-500 text-sm">Loading…</div>:sorted.length===0?<div className="bg-slate-900 border border-slate-800 rounded-xl p-16 text-center"><Eye className="w-8 h-8 text-slate-600 mx-auto mb-3"/><p className="text-slate-400 font-semibold">No insider signals yet</p><p className="text-slate-600 text-xs mt-1">Engine runs automatically at 6 PM IST · Hit "Run Engine" to fetch now</p><button onClick={dispatch} disabled={triggering} className="mt-4 px-4 py-2 bg-violet-700 text-white rounded text-xs font-medium">⚡ Run Engine</button></div>:(
           <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
             <div className="overflow-x-auto overflow-y-auto" style={{maxHeight:'min(680px,calc(100vh-280px))'}}>
               <table className="w-full text-xs border-collapse" style={{minWidth:'900px'}}>

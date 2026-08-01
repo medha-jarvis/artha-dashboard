@@ -165,59 +165,63 @@ export default function ConfluenceHub() {
     try {
       const cutoff = cutoffDate();
 
-      // Fetch signals + performance data together
-      const [peadRaw, s2Raw, insRaw, peadPerf, s2Perf] = await Promise.all([
-        sb(`pead_signals?select=ticker,pead_score,trigger_path,signal_date&gte.signal_date=${cutoff}&gte.pead_score=70&order=pead_score.desc`),
-        sb(`stage2_signals?select=ticker,stage2_score,tier,days_in_stage2,signal_date&gte.signal_date=${cutoff}&gte.stage2_score=75&order=stage2_score.desc`),
-        sb(`insider_signals?select=ticker,company_name,insider_score,transaction_type,acquirer_name,trade_value_in_cr,promoter_historical_6m_return,tier,signal_date&gte.signal_date=${cutoff}&gte.insider_score=75&order=insider_score.desc`),
-        // Performance returns keyed to pead signals
-        sb(`drift_performance?select=signal_id,returns_since_result&not.is.returns_since_result.null`),
-        sb(`stage2_performance?select=signal_id,returns_since_breakout&not.is.returns_since_breakout.null`),
-      ]) as [PeadRow[], Stage2Row[], InsiderRow[], {signal_id: string; returns_since_result: number}[], {signal_id: string; returns_since_breakout: number}[]];
+      // ── Step 1: fetch signals (correct PostgREST filter syntax: column=gte.val) ──
+      const [peadRaw, s2Raw, insRaw] = await Promise.all([
+        sb(`pead_signals?select=id,ticker,pead_score,trigger_path,signal_date&signal_date=gte.${cutoff}&pead_score=gte.70&order=pead_score.desc`),
+        sb(`stage2_signals?select=id,ticker,stage2_score,tier,days_in_stage2,signal_date&signal_date=gte.${cutoff}&stage2_score=gte.75&order=stage2_score.desc`),
+        sb(`insider_signals?select=ticker,company_name,insider_score,transaction_type,acquirer_name,trade_value_in_cr,promoter_historical_6m_return,tier,signal_date&signal_date=gte.${cutoff}&insider_score=gte.75&order=insider_score.desc`),
+      ]) as [PeadRow[], Stage2Row[], InsiderRow[]];
 
-      if (!Array.isArray(peadRaw)) throw new Error('Bad response from Supabase');
+      // Validate
+      if (!Array.isArray(peadRaw))  throw new Error(`PEAD: ${JSON.stringify(peadRaw)}`);
+      if (!Array.isArray(s2Raw))    throw new Error(`Stage2: ${JSON.stringify(s2Raw)}`);
+      if (!Array.isArray(insRaw))   throw new Error(`Insider: ${JSON.stringify(insRaw)}`);
 
       setPeadTotal(peadRaw.length);
       setS2Total(s2Raw.length);
       setInsTotal(insRaw.length);
 
-      // Build performance lookups - we'll need to join through signal IDs
-      // Simpler: re-fetch pead_signals with drift join
-      const peadWithPerf = await sb(
-        `pead_signals?select=id,ticker,pead_score,trigger_path,signal_date,drift_performance(returns_since_result)&gte.signal_date=${cutoff}&gte.pead_score=70`
-      );
-      const s2WithPerf = await sb(
-        `stage2_signals?select=id,ticker,stage2_score,days_in_stage2,signal_date,stage2_performance(returns_since_breakout)&gte.signal_date=${cutoff}&gte.stage2_score=75`
-      );
+      // ── Step 2: fetch performance data separately, join client-side ──
+      // Get signal IDs we care about
+      const peadIds  = (peadRaw as (PeadRow & {id:string})[]).map(r => r.id).filter(Boolean);
+      const s2Ids    = (s2Raw as (Stage2Row & {id:string})[]).map(r => r.id).filter(Boolean);
 
-      // Build maps keyed by ticker (keep best score)
-      const peadMap  = new Map<string, PeadRow & { returns_since_result?: number | null }>();
-      const s2Map    = new Map<string, Stage2Row & { returns_since_breakout?: number | null }>();
+      const [driftPerf, s2Perf] = await Promise.all([
+        peadIds.length > 0
+          ? sb(`drift_performance?select=signal_id,returns_since_result&returns_since_result=not.is.null`)
+          : Promise.resolve([]),
+        s2Ids.length > 0
+          ? sb(`stage2_performance?select=signal_id,returns_since_breakout&returns_since_breakout=not.is.null`)
+          : Promise.resolve([]),
+      ]);
+
+      const driftMap = new Map<string, number>();
+      const s2PerfMap = new Map<string, number>();
+      if (Array.isArray(driftPerf)) driftPerf.forEach((d: {signal_id: string; returns_since_result: number}) => { if (d.signal_id) driftMap.set(d.signal_id, d.returns_since_result); });
+      if (Array.isArray(s2Perf))   s2Perf.forEach((d: {signal_id: string; returns_since_breakout: number}) => { if (d.signal_id) s2PerfMap.set(d.signal_id, d.returns_since_breakout); });
+
+      // ── Step 3: build maps keyed by ticker (best score per ticker) ──
+      const peadMap  = new Map<string, PeadRow & { id: string; returns_since_result?: number | null }>();
+      const s2Map    = new Map<string, Stage2Row & { id: string; returns_since_breakout?: number | null }>();
       const insMap   = new Map<string, InsiderRow>();
 
-      (Array.isArray(peadWithPerf) ? peadWithPerf : peadRaw).forEach((r: PeadRow & { drift_performance?: { returns_since_result: number }[] }) => {
+      (peadRaw as (PeadRow & {id: string})[]).forEach(r => {
         const existing = peadMap.get(r.ticker);
-        if (!existing || r.pead_score > (existing.pead_score ?? 0)) {
-          peadMap.set(r.ticker, {
-            ...r,
-            returns_since_result: r.drift_performance?.[0]?.returns_since_result ?? null,
-          });
+        if (!existing || r.pead_score > existing.pead_score) {
+          peadMap.set(r.ticker, { ...r, returns_since_result: driftMap.get(r.id) ?? null });
         }
       });
 
-      (Array.isArray(s2WithPerf) ? s2WithPerf : s2Raw).forEach((r: Stage2Row & { stage2_performance?: { returns_since_breakout: number }[] }) => {
+      (s2Raw as (Stage2Row & {id: string})[]).forEach(r => {
         const existing = s2Map.get(r.ticker);
-        if (!existing || r.stage2_score > (existing.stage2_score ?? 0)) {
-          s2Map.set(r.ticker, {
-            ...r,
-            returns_since_breakout: r.stage2_performance?.[0]?.returns_since_breakout ?? null,
-          });
+        if (!existing || r.stage2_score > existing.stage2_score) {
+          s2Map.set(r.ticker, { ...r, returns_since_breakout: s2PerfMap.get(r.id) ?? null });
         }
       });
 
-      (Array.isArray(insRaw) ? insRaw : []).forEach((r: InsiderRow) => {
+      insRaw.forEach((r: InsiderRow) => {
         const existing = insMap.get(r.ticker);
-        if (!existing || r.insider_score > (existing.insider_score ?? 0)) insMap.set(r.ticker, r);
+        if (!existing || r.insider_score > existing.insider_score) insMap.set(r.ticker, r);
       });
 
       // Build trinity — only tickers in ≥2 databases
@@ -365,19 +369,6 @@ export default function ConfluenceHub() {
             <AlertCircle className="w-4 h-4 shrink-0" />{error}
           </div>
         )}
-
-        {/* ── Navigation cards ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {([
-            { href:'/portfolio',  icon:BarChart2,  title:'Portfolio',           desc:'Holdings, IRR, TWRR benchmarks, sector allocation, NAV chart',                                      color:'from-emerald-600/20 to-emerald-800/10 border-emerald-500/30 hover:border-emerald-400/50', iconColor:'text-emerald-400', badge:'Live',  badgeColor:'bg-emerald-500/20 text-emerald-300', live:true },
-            { href:'/pead',       icon:Zap,        title:'PEAD Engine',         desc:'Post-earnings drift · Path A (beat) · Path B (trap) · T+1/T+5/T+20 tracking',                    color:'from-amber-600/20 to-amber-800/10 border-amber-500/30 hover:border-amber-400/50',   iconColor:'text-amber-400',   badge:'Live',  badgeColor:'bg-amber-500/20 text-amber-300',   live:true,  sigCount:peadTotal  },
-            { href:'/stage2',     icon:Layers,     title:'Stage 2 Hub',         desc:'Weinstein · Minervini · SOIC structural breakout scanner · 0–100 score · 5 PM IST',             color:'from-blue-600/20 to-blue-800/10 border-blue-500/30 hover:border-blue-400/50',       iconColor:'text-blue-400',    badge:'Live',  badgeColor:'bg-blue-500/20 text-blue-300',     live:true,  sigCount:s2Total     },
-            { href:'/insider',    icon:Eye,        title:'Insider Intel',        desc:'NSE PIT disclosures · Promoter & Director open-market buys/sells · cluster flags',               color:'from-violet-600/20 to-violet-800/10 border-violet-500/30 hover:border-violet-400/50', iconColor:'text-violet-400',  badge:'Live',  badgeColor:'bg-violet-500/20 text-violet-300', live:true,  sigCount:insTotal    },
-            { href:'#',           icon:Target,     title:'Goals',               desc:'Financial goals tracker — retirement, home, education, corpus planning',                          color:'from-cyan-600/20 to-cyan-800/10 border-cyan-500/30',                                   iconColor:'text-cyan-400',    badge:'Soon',  badgeColor:'bg-cyan-500/20 text-cyan-300',     live:false },
-            { href:'#',           icon:Wallet,     title:'Tax & P&L',           desc:'Capital gains, tax-loss harvesting, realized P&L across all holdings',                           color:'from-rose-600/20 to-rose-800/10 border-rose-500/30',                                   iconColor:'text-rose-400',    badge:'Soon',  badgeColor:'bg-rose-500/20 text-rose-300',     live:false },
-            { href:'#',           icon:BookOpen,   title:'Research',            desc:'Stock thesis tracker, smart money moves, institutional research notes',                          color:'from-indigo-600/20 to-indigo-800/10 border-indigo-500/30',                             iconColor:'text-indigo-400',  badge:'Soon',  badgeColor:'bg-indigo-500/20 text-indigo-300', live:false },
-          ] as NavCard[]).map(card => <NavCard key={card.title} card={card} />)}
-        </div>
 
         {/* ── Filter pills ── */}
         <div className="flex flex-wrap items-center gap-3">
@@ -547,6 +538,19 @@ export default function ConfluenceHub() {
             </div>
           </div>
         )}
+
+        {/* ── Navigation cards ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {([
+            { href:'/portfolio',  icon:BarChart2,  title:'Portfolio',    desc:'Holdings, IRR, TWRR benchmarks, sector allocation, NAV chart',                          color:'from-emerald-600/20 to-emerald-800/10 border-emerald-500/30 hover:border-emerald-400/50', iconColor:'text-emerald-400', badge:'Live', badgeColor:'bg-emerald-500/20 text-emerald-300', live:true },
+            { href:'/pead',       icon:Zap,        title:'PEAD Engine',  desc:'Post-earnings drift · Path A (beat) · Path B (trap) · T+1/T+5/T+20 tracking',        color:'from-amber-600/20 to-amber-800/10 border-amber-500/30 hover:border-amber-400/50',   iconColor:'text-amber-400',   badge:'Live', badgeColor:'bg-amber-500/20 text-amber-300',   live:true,  sigCount:peadTotal },
+            { href:'/stage2',     icon:Layers,     title:'Stage 2 Hub',  desc:'Weinstein · Minervini · SOIC structural breakout scanner · 0–100 score · 5 PM IST',  color:'from-blue-600/20 to-blue-800/10 border-blue-500/30 hover:border-blue-400/50',       iconColor:'text-blue-400',    badge:'Live', badgeColor:'bg-blue-500/20 text-blue-300',     live:true,  sigCount:s2Total   },
+            { href:'/insider',    icon:Eye,        title:'Insider Intel', desc:'NSE PIT disclosures · Promoter & Director open-market buys/sells · cluster flags',    color:'from-violet-600/20 to-violet-800/10 border-violet-500/30 hover:border-violet-400/50', iconColor:'text-violet-400',  badge:'Live', badgeColor:'bg-violet-500/20 text-violet-300', live:true,  sigCount:insTotal  },
+            { href:'#',           icon:Target,     title:'Goals',        desc:'Financial goals tracker — retirement, home, education, corpus planning',               color:'from-cyan-600/20 to-cyan-800/10 border-cyan-500/30',                                   iconColor:'text-cyan-400',    badge:'Soon', badgeColor:'bg-cyan-500/20 text-cyan-300',     live:false },
+            { href:'#',           icon:Wallet,     title:'Tax & P&L',    desc:'Capital gains, tax-loss harvesting, realized P&L across all holdings',                color:'from-rose-600/20 to-rose-800/10 border-rose-500/30',                                   iconColor:'text-rose-400',    badge:'Soon', badgeColor:'bg-rose-500/20 text-rose-300',     live:false },
+            { href:'#',           icon:BookOpen,   title:'Research',     desc:'Stock thesis tracker, smart money moves, institutional research notes',               color:'from-indigo-600/20 to-indigo-800/10 border-indigo-500/30',                             iconColor:'text-indigo-400',  badge:'Soon', badgeColor:'bg-indigo-500/20 text-indigo-300', live:false },
+          ] as NavCard[]).map(card => <NavCard key={card.title} card={card} />)}
+        </div>
 
         <div className="pb-2" />
 
