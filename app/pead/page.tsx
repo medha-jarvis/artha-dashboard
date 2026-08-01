@@ -2,12 +2,11 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Zap, RefreshCw, TrendingUp, TrendingDown, ChevronUp, ChevronDown, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Zap, RefreshCw, AlertCircle, ChevronUp, ChevronDown } from 'lucide-react';
 
-// ── Supabase REST (anon key — public, safe to expose) ─────────────────────────
+// ── Supabase REST (public anon key) ───────────────────────────────────────────
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
-
 const sb = (path: string) =>
   fetch(`${SB_URL}/rest/v1/${path}`, {
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
@@ -30,153 +29,77 @@ interface Signal {
   day_gap_pct: number | null;
   ttm_pe: number | null;
   trigger_path: 'A' | 'WATCH' | 'NONE';
-  // Joined from drift_performance:
   returns_since_result?: number | null;
   daily_return?: number | null;
-  t_1_return?: number | null;
-  t_5_return?: number | null;
-  t_20_return?: number | null;
-  drift_updated_at?: string | null;
 }
 
-type SortCol = 'pead_score' | 'signal_date' | 'ttm_pe' | 'returns_since_result' | 'daily_return';
+type SortKey = 'pead_score' | 'signal_date' | 'returns_since_result' | 'daily_return' | 'ttm_pe' | 'volume_multiplier';
 type SortDir = 'asc' | 'desc';
+type FilterMode = 'all' | 'path_a' | 'watch' | 'smart_money';
 type DateRange = 'week' | 'prev_week' | 'month';
-type ScoreFilter = 'all' | '50' | '70';
 
-// ── Formatters ────────────────────────────────────────────────────────────────
-const pct   = (v: number | null | undefined, dec = 2) =>
-  v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(dec)}%`;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmt = (v: number | null | undefined, dec = 1, sign = false) =>
+  v == null ? '—' : `${sign && v >= 0 ? '+' : ''}${v.toFixed(dec)}`;
+const fmtPct = (v: number | null | undefined) => fmt(v, 1, true) !== '—' ? `${fmt(v, 1, true)}%` : '—';
 const fmtDate = (s: string) =>
   new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 
-const retColor = (v: number | null | undefined) =>
+const retCls = (v: number | null | undefined) =>
   v == null ? 'text-slate-500' :
-  v >  10   ? 'text-emerald-400 font-bold' :
-  v >   0   ? 'text-emerald-300' :
+  v > 10    ? 'text-emerald-400 font-bold' :
+  v > 0     ? 'text-emerald-300' :
   v > -10   ? 'text-red-400' : 'text-red-500 font-bold';
 
-const scoreColor = (s: number) =>
-  s >= 70 ? 'text-emerald-400' :
-  s >= 50 ? 'text-amber-400'  : 'text-slate-400';
-
-const scoreBg = (s: number) =>
-  s >= 70 ? 'bg-emerald-500/15 border border-emerald-500/30' :
-  s >= 50 ? 'bg-amber-500/10 border border-amber-500/30'    : '';
-
-const rowHighlight = (s: number) =>
-  s >= 70 ? 'hover:bg-emerald-950/40' :
-  s >= 50 ? 'hover:bg-amber-950/30'   : 'hover:bg-slate-800/30';
-
-const pathBadge = (p: string) =>
-  p === 'A'     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
-  p === 'WATCH' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-                  'bg-slate-700/50 text-slate-500';
-
-// ── Score Breakdown Tooltip ───────────────────────────────────────────────────
-function ScoreBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
-  const pct = Math.max(0, Math.min(100, (value / max) * 100));
-  return (
-    <div className="mb-1.5">
-      <div className="flex justify-between text-[10px] mb-0.5">
-        <span className="text-slate-400">{label}</span>
-        <span className={color}>{value}/{max}</span>
-      </div>
-      <div className="h-1 bg-slate-700 rounded-full">
-        <div className={`h-1 rounded-full ${color.includes('emerald') ? 'bg-emerald-500' : color.includes('amber') ? 'bg-amber-500' : 'bg-blue-500'}`}
-          style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function ScoreTooltip({ sig }: { sig: Signal }) {
-  const profitPts = sig.yoy_profit_pct == null ? 0 :
-    sig.yoy_profit_pct > 100 ? 20 : sig.yoy_profit_pct > 50 ? 15 :
-    sig.yoy_profit_pct > 30  ? 10 : sig.yoy_profit_pct > 0  ?  5 : 0;
-  const revPts = sig.yoy_revenue_pct == null ? 0 :
-    sig.yoy_revenue_pct > 25 ? 10 : sig.yoy_revenue_pct > 15 ? 5 : 0;
-  const opmPts = sig.opm_expansion_bps == null ? 0 :
-    sig.opm_expansion_bps > 300 ? 15 : sig.opm_expansion_bps > 200 ? 10 :
-    sig.opm_expansion_bps > 100 ?  5 : 0;
-  const emaPts = (sig.price_vs_ema200_pct ?? 0) > 0 ? 20 : 0;
-  const volPts = sig.volume_multiplier == null ? 0 :
-    sig.volume_multiplier > 5 ? 20 : sig.volume_multiplier > 3 ? 15 :
-    sig.volume_multiplier > 2 ? 10 : sig.volume_multiplier > 1.5 ? 5 : 0;
-  const gapPts = sig.day_gap_pct == null ? 0 :
-    sig.day_gap_pct > 4 ? 15 : sig.day_gap_pct > 2 ? 8 : sig.day_gap_pct > 0 ? 3 : 0;
-
-  return (
-    <div className="w-48 bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl">
-      <div className="text-xs font-bold text-white mb-2">Score Breakdown</div>
-      <ScoreBar label={`Net Profit YoY ${sig.yoy_profit_pct != null ? pct(sig.yoy_profit_pct,1) : '—'}`}  value={profitPts} max={20} color="text-emerald-400" />
-      <ScoreBar label={`Revenue YoY ${sig.yoy_revenue_pct != null ? pct(sig.yoy_revenue_pct,1) : '—'}`}    value={revPts}    max={10} color="text-blue-400" />
-      <ScoreBar label={`OPM Exp ${sig.opm_expansion_bps != null ? `${sig.opm_expansion_bps.toFixed(0)}bps` : '—'}`} value={opmPts} max={15} color="text-violet-400" />
-      <ScoreBar label={`vs EMA200 ${sig.price_vs_ema200_pct != null ? pct(sig.price_vs_ema200_pct,1) : '—'}`} value={emaPts} max={20} color="text-amber-400" />
-      <ScoreBar label={`Volume ${sig.volume_multiplier != null ? `${sig.volume_multiplier.toFixed(1)}x` : '—'}`} value={volPts} max={20} color="text-emerald-400" />
-      <ScoreBar label={`Day Gap ${sig.day_gap_pct != null ? pct(sig.day_gap_pct,1) : '—'}`} value={gapPts} max={15} color="text-amber-400" />
-    </div>
-  );
-}
-
-// ── Sort header ───────────────────────────────────────────────────────────────
-function Th({ col, label, right, sortCol, sortDir, onSort }:
-  { col: SortCol; label: string; right?: boolean; sortCol: SortCol; sortDir: SortDir; onSort: (c: SortCol) => void }) {
-  const active = sortCol === col;
+// ── Sortable header ───────────────────────────────────────────────────────────
+function Th({ col, label, right, active, dir, onSort }:
+  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void }) {
   return (
     <th
       onClick={() => onSort(col)}
-      className={`px-3 py-3 text-[11px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap
+      className={`px-2.5 py-3 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap
         ${right ? 'text-right' : 'text-left'}
         ${active ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
     >
-      <span className="inline-flex items-center gap-1">
+      <span className="inline-flex items-center gap-0.5">
         {label}
-        {active ? (sortDir === 'desc' ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />) : null}
+        {active ? (dir === 'desc' ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />) : null}
       </span>
     </th>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 export default function PEADPage() {
   const [signals,    setSignals]    = useState<Signal[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
-  const [triggering, setTriggering] = useState(false);
+  const [triggering, setTriggering] = useState<string | null>(null);
   const [trigMsg,    setTrigMsg]    = useState('');
-  const [sortCol,    setSortCol]    = useState<SortCol>('pead_score');
+  const [sortKey,    setSortKey]    = useState<SortKey>('pead_score');
   const [sortDir,    setSortDir]    = useState<SortDir>('desc');
-  const [range,      setRange]      = useState<DateRange>('week');
-  const [scoreFilter,setScoreFilter]= useState<ScoreFilter>('all');
-  const [hoverScore, setHoverScore] = useState<string | null>(null);
+  const [filter,     setFilter]     = useState<FilterMode>('all');
+  const [dateRange,  setDateRange]  = useState<DateRange>('week');
 
   const loadData = async () => {
     setLoading(true); setError('');
     try {
       const [rawSigs, rawDrift] = await Promise.all([
         sb('pead_signals?select=*&order=pead_score.desc&limit=500'),
-        sb('drift_performance?select=*'),
+        sb('drift_performance?select=signal_id,returns_since_result,daily_return'),
       ]);
-      if (!Array.isArray(rawSigs)) throw new Error('Bad response');
-
-      const driftMap: Record<string, Record<string, unknown>> = {};
-      (rawDrift || []).forEach((d: Record<string, unknown>) => {
-        if (typeof d.signal_id === 'string') driftMap[d.signal_id] = d;
+      if (!Array.isArray(rawSigs)) throw new Error('Unexpected response');
+      const driftMap: Record<string, { returns_since_result: number | null; daily_return: number | null }> = {};
+      (rawDrift || []).forEach((d: { signal_id: string; returns_since_result: number | null; daily_return: number | null }) => {
+        driftMap[d.signal_id] = d;
       });
-
-      const joined: Signal[] = rawSigs.map((s: Signal) => ({
+      setSignals(rawSigs.map((s: Signal) => ({
         ...s,
-        returns_since_result: (driftMap[s.id]?.returns_since_result as number) ?? null,
-        daily_return:         (driftMap[s.id]?.daily_return as number) ?? null,
-        t_1_return:           (driftMap[s.id]?.t_1_return as number) ?? null,
-        t_5_return:           (driftMap[s.id]?.t_5_return as number) ?? null,
-        t_20_return:          (driftMap[s.id]?.t_20_return as number) ?? null,
-        drift_updated_at:     (driftMap[s.id]?.updated_at as string) ?? null,
-      }));
-      setSignals(joined);
+        returns_since_result: driftMap[s.id]?.returns_since_result ?? null,
+        daily_return:         driftMap[s.id]?.daily_return ?? null,
+      })));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
       setLoading(false);
     }
@@ -184,8 +107,8 @@ export default function PEADPage() {
 
   useEffect(() => { loadData(); }, []);
 
-  const runEngine = async (script: 'pead_engine' | 'drift_tracker' | 'backfill') => {
-    setTriggering(true); setTrigMsg('');
+  const dispatch = async (script: string) => {
+    setTriggering(script); setTrigMsg('');
     try {
       const r = await fetch('/api/proxy/pead/trigger', {
         method: 'POST',
@@ -194,98 +117,93 @@ export default function PEADPage() {
       });
       const d = await r.json();
       setTrigMsg(d.ok
-        ? `✓ ${script === 'backfill' ? 'Backfill' : script === 'drift_tracker' ? 'Drift tracker' : 'Engine'} dispatched — check back in 5 min`
-        : `✗ ${d.error || 'Trigger failed'}`);
-    } catch (e: unknown) {
-      setTrigMsg(`✗ ${e instanceof Error ? e.message : 'Network error'}`);
-    } finally {
-      setTriggering(false);
-    }
+        ? `✓ ${script === 'backfill' ? 'Backfill' : script === 'drift_tracker' ? 'Returns refresh' : 'Engine scan'} dispatched — check back in ~5 min`
+        : `✗ ${d.error || 'Dispatch failed'}`);
+    } catch { setTrigMsg('✗ Network error'); }
+    finally { setTriggering(null); }
   };
 
-  // ── Date range filter ────────────────────────────────────────────────────────
-  const today = new Date();
+  // Date filter
   const dateFiltered = useMemo(() => {
-    const now = new Date();
-    const cutoff = new Date(now);
-    const prevStart = new Date(now);
+    const cutoff = new Date();
+    if (dateRange === 'week')      cutoff.setDate(cutoff.getDate() - 7);
+    else if (dateRange === 'prev_week') { /* handled below */ }
+    else                           cutoff.setDate(cutoff.getDate() - 30);
 
-    if (range === 'week') {
-      cutoff.setDate(cutoff.getDate() - 7);
-      return signals.filter(s => new Date(s.signal_date) >= cutoff);
-    } else if (range === 'prev_week') {
-      cutoff.setDate(cutoff.getDate() - 14);
-      prevStart.setDate(prevStart.getDate() - 7);
-      return signals.filter(s => {
-        const d = new Date(s.signal_date);
-        return d >= cutoff && d < prevStart;
-      });
-    } else {
-      cutoff.setDate(cutoff.getDate() - 30);
-      return signals.filter(s => new Date(s.signal_date) >= cutoff);
+    if (dateRange === 'prev_week') {
+      const wStart = new Date(); wStart.setDate(wStart.getDate() - 14);
+      const wEnd   = new Date(); wEnd.setDate(wEnd.getDate() - 7);
+      return signals.filter(s => { const d = new Date(s.signal_date); return d >= wStart && d < wEnd; });
     }
-  }, [signals, range]);
+    return signals.filter(s => new Date(s.signal_date) >= cutoff);
+  }, [signals, dateRange]);
 
-  // ── Score filter ─────────────────────────────────────────────────────────────
-  const scoreFiltered = useMemo(() => {
-    if (scoreFilter === '70') return dateFiltered.filter(s => s.pead_score >= 70);
-    if (scoreFilter === '50') return dateFiltered.filter(s => s.pead_score >= 50);
-    return dateFiltered;
-  }, [dateFiltered, scoreFilter]);
+  // Mode filter
+  const modeFiltered = useMemo(() => {
+    switch (filter) {
+      case 'path_a':     return dateFiltered.filter(s => s.pead_score >= 70);
+      case 'watch':      return dateFiltered.filter(s => s.pead_score >= 50 && s.pead_score < 70);
+      case 'smart_money':return dateFiltered.filter(s => s.pead_score < 40 && (s.returns_since_result ?? 0) > 8);
+      default:           return dateFiltered;
+    }
+  }, [dateFiltered, filter]);
 
-  // ── Sort ─────────────────────────────────────────────────────────────────────
+  // Sort
   const sorted = useMemo(() => {
-    return [...scoreFiltered].sort((a, b) => {
-      const dir = sortDir === 'desc' ? -1 : 1;
-      const va = (a[sortCol] as number | null) ?? (sortDir === 'desc' ? -Infinity : Infinity);
-      const vb = (b[sortCol] as number | null) ?? (sortDir === 'desc' ? -Infinity : Infinity);
-      if (sortCol === 'signal_date') return dir * a.signal_date.localeCompare(b.signal_date);
-      return dir * ((va as number) - (vb as number));
+    return [...modeFiltered].sort((a, b) => {
+      const d = sortDir === 'desc' ? -1 : 1;
+      const va = (a[sortKey] as number | null) ?? (sortDir === 'desc' ? -Infinity : Infinity);
+      const vb = (b[sortKey] as number | null) ?? (sortDir === 'desc' ? -Infinity : Infinity);
+      if (sortKey === 'signal_date') return d * a.signal_date.localeCompare(b.signal_date);
+      return d * ((va as number) - (vb as number));
     });
-  }, [scoreFiltered, sortCol, sortDir]);
+  }, [modeFiltered, sortKey, sortDir]);
 
-  const handleSort = (col: SortCol) => {
-    if (sortCol === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
-    else { setSortCol(col); setSortDir('desc'); }
+  const onSort = (col: SortKey) => {
+    if (sortKey === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortKey(col); setSortDir('desc'); }
   };
 
-  // ── Stats ─────────────────────────────────────────────────────────────────────
-  const pathACount  = scoreFiltered.filter(s => s.trigger_path === 'A').length;
-  const watchCount  = scoreFiltered.filter(s => s.trigger_path === 'WATCH').length;
-  const avgScore    = scoreFiltered.length
-    ? Math.round(scoreFiltered.reduce((a, s) => a + s.pead_score, 0) / scoreFiltered.length) : 0;
-  const avgReturn   = (() => {
-    const vals = scoreFiltered.map(s => s.returns_since_result).filter((v): v is number => v != null);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  // Stats
+  const pathA   = dateFiltered.filter(s => s.pead_score >= 70).length;
+  const watches = dateFiltered.filter(s => s.pead_score >= 50 && s.pead_score < 70).length;
+  const smartMo = dateFiltered.filter(s => s.pead_score < 40 && (s.returns_since_result ?? 0) > 8).length;
+  const avgRet  = (() => {
+    const v = dateFiltered.map(s => s.returns_since_result).filter((v): v is number => v != null);
+    return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null;
   })();
 
   return (
-    <div className="min-h-screen bg-slate-950 p-3 md:p-5">
-      <div className="max-w-7xl mx-auto space-y-4">
+    <div className="min-h-screen bg-[#0d1117] p-3 md:p-5">
+      <div className="max-w-[1600px] mx-auto space-y-4">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Link href="/" className="text-slate-500 hover:text-slate-300 transition"><ArrowLeft className="w-4 h-4" /></Link>
-              <h1 className="text-xl font-black text-white flex items-center gap-2">
-                <Zap className="w-5 h-5 text-amber-400" />PEAD Candidates Dashboard
-              </h1>
+              <Link href="/" className="text-slate-500 hover:text-slate-300"><ArrowLeft className="w-4 h-4" /></Link>
+              <Zap className="w-5 h-5 text-amber-400" />
+              <h1 className="text-lg font-black text-white">PEAD Candidates Dashboard</h1>
             </div>
-            <p className="text-xs text-slate-500 ml-6">All earnings scored 0–100 · Path A ≥70 · WATCH 50–69 · Sorted by PEAD Score</p>
+            <p className="text-xs text-slate-500 ml-11">All earnings scored 0–100 · Updated 9AM, 2:30PM, 4PM IST</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={() => runEngine('pead_engine')} disabled={triggering}
+            <button onClick={() => dispatch('pead_engine')} disabled={!!triggering}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold disabled:opacity-50 transition">
-              <Zap className={`w-3.5 h-3.5 ${triggering ? 'animate-pulse' : ''}`} />
-              {triggering ? 'Dispatching…' : 'Run Engine'}
+              <Zap className={`w-3.5 h-3.5 ${triggering === 'pead_engine' ? 'animate-pulse' : ''}`} />
+              ⚡ Run Today's Scan
             </button>
-            <button onClick={() => runEngine('drift_tracker')} disabled={triggering}
+            <button onClick={() => dispatch('drift_tracker')} disabled={!!triggering}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-xs font-medium disabled:opacity-50 transition">
-              <RefreshCw className="w-3.5 h-3.5" />Refresh Returns
+              <RefreshCw className={`w-3.5 h-3.5 ${triggering === 'drift_tracker' ? 'animate-spin' : ''}`} />
+              ↺ Refresh Returns
+            </button>
+            <button onClick={() => dispatch('backfill')} disabled={!!triggering}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-medium disabled:opacity-50 transition">
+              ⏮️ Seed Last 7 Days
             </button>
             <button onClick={loadData} disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-medium disabled:opacity-50 transition">
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-medium disabled:opacity-50 transition">
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               Refresh Data
             </button>
@@ -299,152 +217,205 @@ export default function PEADPage() {
           </div>
         )}
 
-        {/* Error */}
         {error && (
-          <div className="flex items-center gap-2 bg-red-900/30 border border-red-700/40 rounded-xl p-3 text-red-300 text-xs">
+          <div className="flex items-center gap-2 bg-red-900/30 border border-red-700/40 rounded-lg p-3 text-red-300 text-xs">
             <AlertCircle className="w-4 h-4 shrink-0" />{error}
           </div>
         )}
 
-        {/* Stats bar */}
+        {/* ── Stats bar ── */}
         {signals.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             {[
-              { label: 'In View',    v: scoreFiltered.length.toString(),       accent: 'text-white' },
-              { label: 'Path A (≥70)', v: pathACount.toString(),               accent: 'text-emerald-400' },
-              { label: 'WATCH (≥50)', v: watchCount.toString(),                accent: 'text-amber-400' },
-              { label: 'Avg Score',  v: avgScore.toString(),                   accent: scoreColor(avgScore) },
-              { label: 'Avg Return', v: pct(avgReturn),                        accent: retColor(avgReturn) },
+              { l: 'Total',             v: dateFiltered.length.toString(), c: 'text-white' },
+              { l: '🟢 Path A (≥70)',    v: pathA.toString(),              c: 'text-emerald-400' },
+              { l: '🟡 Watch (50–69)',   v: watches.toString(),            c: 'text-amber-400' },
+              { l: '⚡ Smart Money',     v: smartMo.toString(),            c: 'text-violet-400' },
+              { l: 'Avg Return',         v: fmtPct(avgRet),                c: avgRet == null ? 'text-slate-500' : avgRet >= 0 ? 'text-emerald-400' : 'text-red-400' },
             ].map(s => (
-              <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
-                <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{s.label}</div>
-                <div className={`text-lg font-black ${s.accent}`}>{s.v}</div>
+              <div key={s.l} className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                <div className="text-[10px] text-slate-500 mb-1 whitespace-nowrap">{s.l}</div>
+                <div className={`text-lg font-black ${s.c}`}>{s.v}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Filters */}
+        {/* ── Controls ── */}
         <div className="flex flex-wrap items-center gap-3">
           {/* Date range */}
-          <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1">
-            {([['week', 'This Week'], ['prev_week', 'Last Week'], ['month', 'Last Month']] as [DateRange, string][]).map(([v, l]) => (
-              <button key={v} onClick={() => setRange(v)}
-                className={`px-3 py-1 text-xs rounded font-medium transition ${range === v ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-                {l}
-              </button>
+          <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1">
+            {([['week','This Week'],['prev_week','Last Week'],['month','Last 30d']] as [DateRange,string][]).map(([v,l])=>(
+              <button key={v} onClick={()=>setDateRange(v)}
+                className={`px-3 py-1 text-xs rounded font-medium transition ${dateRange===v?'bg-indigo-600 text-white':'text-slate-400 hover:text-white'}`}>{l}</button>
             ))}
           </div>
-          {/* Score filter */}
-          <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1">
-            {([['all', 'All'], ['50', 'Score ≥50'], ['70', 'Score ≥70']] as [ScoreFilter, string][]).map(([v, l]) => (
-              <button key={v} onClick={() => setScoreFilter(v)}
-                className={`px-3 py-1 text-xs rounded font-medium transition ${scoreFilter === v ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-                {l}
-              </button>
+
+          {/* Filter pills */}
+          <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 flex-wrap">
+            {([
+              ['all',         '📋 All'],
+              ['path_a',      '🟢 Path A (≥70)'],
+              ['watch',       '🟡 Watch (50–69)'],
+              ['smart_money', '⚡ Smart Money Divergence'],
+            ] as [FilterMode,string][]).map(([v,l])=>(
+              <button key={v} onClick={()=>setFilter(v)}
+                className={`px-3 py-1 text-xs rounded font-medium transition whitespace-nowrap ${filter===v?'bg-amber-600 text-white':'text-slate-400 hover:text-white'}`}>{l}</button>
             ))}
           </div>
+
           <span className="text-slate-600 text-xs">{sorted.length} companies</span>
         </div>
 
-        {/* Table */}
+        {/* ── Table ── */}
         {loading ? (
-          <div className="text-center py-20 text-slate-500 text-sm">Loading signals…</div>
+          <div className="text-center py-20 text-slate-500 text-sm">Loading…</div>
         ) : sorted.length === 0 ? (
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-16 text-center">
             <Zap className="w-8 h-8 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-400 font-semibold">No signals in this range</p>
-            <p className="text-slate-600 text-xs mt-1">Click "Run Engine" to trigger a scan, or "Backfill" for historical data</p>
-            <button onClick={() => runEngine('backfill')} disabled={triggering}
-              className="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition">
-              ↺ Backfill Last 7 Days
+            <p className="text-slate-400 font-semibold">No data in this range</p>
+            <p className="text-slate-600 text-xs mt-1">Seed historical data or trigger today's scan</p>
+            <button onClick={() => dispatch('backfill')} disabled={!!triggering}
+              className="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-medium disabled:opacity-50">
+              ⏮️ Seed Last 7 Days
             </button>
           </div>
         ) : (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 'min(680px, calc(100vh - 280px))' }}>
-              <table className="w-full text-xs border-collapse" style={{ minWidth: '900px' }}>
+          <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 'min(680px, calc(100vh - 290px))' }}>
+              <table className="w-full text-xs border-collapse" style={{ minWidth: '1200px' }}>
                 <thead className="sticky top-0 z-20">
-                  <tr className="border-b-2 border-slate-700 bg-slate-900">
-                    <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-900 whitespace-nowrap sticky left-0 z-30">
-                      Company
+                  <tr className="bg-[#161b22] border-b-2 border-slate-700">
+                    {/* Company — sticky left */}
+                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap">
+                      Ticker / Company
                     </th>
-                    <Th col="pead_score"           label="PEAD Score"    sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
-                    <Th col="signal_date"           label="Result Date"   sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
-                    <Th col="ttm_pe"                label="TTM PE"  right sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
-                    <Th col="returns_since_result"  label="Returns %"right sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
-                    <Th col="daily_return"          label="Daily Ret %"right sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />
-                    <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-900 whitespace-nowrap">Path</th>
+                    <Th col="pead_score"          label="PEAD Score"        active={sortKey==='pead_score'}          dir={sortDir} onSort={onSort} />
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Fundamentals</th>
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Trend (200 EMA)</th>
+                    <Th col="volume_multiplier"   label="Vol Spike"         active={sortKey==='volume_multiplier'}   dir={sortDir} onSort={onSort} />
+                    <th className="px-2.5 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Day Gap</th>
+                    <Th col="signal_date"         label="Result Date"       active={sortKey==='signal_date'}         dir={sortDir} onSort={onSort} />
+                    <Th col="ttm_pe"              label="TTM PE"    right   active={sortKey==='ttm_pe'}              dir={sortDir} onSort={onSort} />
+                    <Th col="returns_since_result" label="Returns %" right  active={sortKey==='returns_since_result'} dir={sortDir} onSort={onSort} />
+                    <Th col="daily_return"        label="Daily Ret %" right  active={sortKey==='daily_return'}        dir={sortDir} onSort={onSort} />
+                    <th className="px-2.5 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Tier</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map(sig => (
-                    <tr key={sig.id}
-                      className={`border-b border-slate-800/60 transition-colors ${rowHighlight(sig.pead_score)} ${sig.pead_score >= 70 ? 'bg-emerald-950/10' : sig.pead_score >= 50 ? 'bg-amber-950/5' : ''}`}>
+                  {sorted.map(sig => {
+                    const s = sig.pead_score;
+                    const rowBg = s >= 70 ? 'bg-emerald-950/15 hover:bg-emerald-950/30'
+                                : s >= 50 ? 'bg-amber-950/10 hover:bg-amber-950/20'
+                                : 'hover:bg-slate-800/30';
+                    const scoreCls = s >= 70 ? 'text-emerald-400' : s >= 50 ? 'text-amber-400' : 'text-slate-400';
+                    const scoreBg  = s >= 70 ? 'bg-emerald-500/20 border border-emerald-500/30'
+                                   : s >= 50 ? 'bg-amber-500/15 border border-amber-500/30' : '';
+                    const tierCls  = s >= 70 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                   : s >= 50 ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' : 'bg-slate-700/40 text-slate-500';
+                    const tierLbl  = s >= 70 ? 'PATH A' : s >= 50 ? 'WATCH' : 'NONE';
 
-                      {/* Company */}
-                      <td className="px-3 py-2.5 sticky left-0 bg-slate-900 z-10 whitespace-nowrap">
-                        <div className="font-bold text-white text-sm">{sig.ticker.replace('.NS','')}</div>
-                        <div className="text-slate-500 text-[10px] truncate max-w-[160px]">{sig.company_name || sig.sector || '—'}</div>
-                      </td>
+                    // Fundamentals cell
+                    const fundParts = [
+                      sig.yoy_profit_pct  != null ? `${sig.yoy_profit_pct >= 0 ? '+' : ''}${sig.yoy_profit_pct.toFixed(0)}%` : null,
+                      sig.yoy_revenue_pct != null ? `${sig.yoy_revenue_pct >= 0 ? '+' : ''}${sig.yoy_revenue_pct.toFixed(0)}%` : null,
+                      sig.opm_expansion_bps != null ? `${sig.opm_expansion_bps >= 0 ? '+' : ''}${sig.opm_expansion_bps.toFixed(0)}bps` : null,
+                    ];
+                    const fundStr = fundParts.filter(Boolean).join(' | ') || '—';
 
-                      {/* PEAD Score with breakdown tooltip */}
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        <div className="relative inline-block"
-                          onMouseEnter={() => setHoverScore(sig.id)}
-                          onMouseLeave={() => setHoverScore(null)}>
-                          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg ${scoreBg(sig.pead_score)}`}>
-                            <span className={`text-base font-black ${scoreColor(sig.pead_score)}`}>{sig.pead_score}</span>
-                          </div>
-                          {hoverScore === sig.id && (
-                            <div className="absolute left-0 top-8 z-50">
-                              <ScoreTooltip sig={sig} />
+                    // EMA display
+                    const ema = sig.price_vs_ema200_pct;
+                    const emaStr = ema == null ? '—'
+                      : ema >= 0 ? `🟢 +${ema.toFixed(1)}% above EMA`
+                      :             `🔴 ${ema.toFixed(1)}% below EMA`;
+
+                    // Volume
+                    const vm  = sig.volume_multiplier;
+                    const volStr = vm == null ? '—'
+                      : vm >= 3 ? `🔥 ${vm.toFixed(1)}x` : `${vm.toFixed(1)}x`;
+
+                    // Day gap
+                    const gap = sig.day_gap_pct;
+                    const gapStr = gap == null ? '—'
+                      : gap > 0 ? `📈 +${gap.toFixed(1)}%` : `📉 ${gap.toFixed(1)}%`;
+
+                    const stockscanUrl = `https://stockscans.in/stock/${sig.ticker.replace('.NS','')}`;
+
+                    return (
+                      <tr key={sig.id} className={`border-b border-slate-800/50 transition-colors ${rowBg}`}>
+
+                        {/* Company — sticky */}
+                        <td className="px-3 py-2.5 sticky left-0 bg-[#0d1117] z-10 whitespace-nowrap"
+                          style={{ backgroundColor: s >= 70 ? '#0a1f12' : s >= 50 ? '#1a1500' : '#0d1117' }}>
+                          <a href={stockscanUrl} target="_blank" rel="noopener noreferrer"
+                            className="font-bold text-white hover:text-blue-400 transition text-sm">
+                            {sig.ticker.replace('.NS','')}
+                          </a>
+                          {(sig.company_name || sig.sector) && (
+                            <div className="text-slate-500 text-[10px] truncate max-w-[150px]">
+                              {sig.company_name || sig.sector}
                             </div>
                           )}
-                        </div>
-                      </td>
+                        </td>
 
-                      {/* Result Date */}
-                      <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{fmtDate(sig.signal_date)}</td>
+                        {/* PEAD Score */}
+                        <td className="px-2.5 py-2.5 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-lg ${scoreBg}`}>
+                            <span className={`text-base font-black ${scoreCls}`}>{s}</span>
+                          </span>
+                        </td>
 
-                      {/* TTM PE */}
-                      <td className={`px-3 py-2.5 text-right whitespace-nowrap ${sig.ttm_pe && sig.ttm_pe > 60 ? 'text-amber-400' : 'text-slate-300'}`}>
-                        {sig.ttm_pe ? sig.ttm_pe.toFixed(1) : '—'}
-                      </td>
+                        {/* Fundamentals */}
+                        <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-300 font-mono text-[11px]">
+                          {fundStr}
+                        </td>
 
-                      {/* Returns since result */}
-                      <td className={`px-3 py-2.5 text-right whitespace-nowrap font-semibold ${retColor(sig.returns_since_result)}`}>
-                        <div className="flex items-center justify-end gap-1">
-                          {sig.returns_since_result != null && (
-                            sig.returns_since_result >= 0
-                              ? <TrendingUp className="w-3 h-3" />
-                              : <TrendingDown className="w-3 h-3" />
-                          )}
-                          {pct(sig.returns_since_result)}
-                        </div>
-                      </td>
+                        {/* Trend (200 EMA) */}
+                        <td className={`px-2.5 py-2.5 whitespace-nowrap text-[11px] font-medium ${ema == null ? 'text-slate-600' : ema >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {emaStr}
+                        </td>
 
-                      {/* Daily Return */}
-                      <td className={`px-3 py-2.5 text-right whitespace-nowrap ${retColor(sig.daily_return)}`}>
-                        {pct(sig.daily_return)}
-                      </td>
+                        {/* Volume */}
+                        <td className={`px-2.5 py-2.5 whitespace-nowrap text-[11px] font-semibold ${vm == null ? 'text-slate-600' : vm >= 3 ? 'text-orange-400' : vm >= 2 ? 'text-amber-400' : 'text-slate-300'}`}>
+                          {volStr}
+                        </td>
 
-                      {/* Path badge */}
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pathBadge(sig.trigger_path)}`}>
-                          {sig.trigger_path}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                        {/* Day Gap */}
+                        <td className={`px-2.5 py-2.5 text-right whitespace-nowrap text-[11px] font-medium ${gap == null ? 'text-slate-600' : gap > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {gapStr}
+                        </td>
+
+                        {/* Result Date */}
+                        <td className="px-2.5 py-2.5 text-slate-400 whitespace-nowrap">{fmtDate(sig.signal_date)}</td>
+
+                        {/* TTM PE */}
+                        <td className={`px-2.5 py-2.5 text-right whitespace-nowrap ${sig.ttm_pe && sig.ttm_pe > 60 ? 'text-amber-400' : 'text-slate-300'}`}>
+                          {sig.ttm_pe ? sig.ttm_pe.toFixed(1) : '—'}
+                        </td>
+
+                        {/* Returns since result */}
+                        <td className={`px-2.5 py-2.5 text-right whitespace-nowrap font-semibold ${retCls(sig.returns_since_result)}`}>
+                          {fmtPct(sig.returns_since_result)}
+                        </td>
+
+                        {/* Daily return */}
+                        <td className={`px-2.5 py-2.5 text-right whitespace-nowrap ${retCls(sig.daily_return)}`}>
+                          {fmtPct(sig.daily_return)}
+                        </td>
+
+                        {/* Tier */}
+                        <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${tierCls}`}>{tierLbl}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-
-            {/* Table footer */}
-            <div className="px-4 py-2 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} of {signals.length} signals · Hover score for breakdown</span>
-              <span>Returns updated daily at 4:15 PM IST</span>
+            <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
+              <span>{sorted.length} of {signals.length} signals · Ticker links → StockScans</span>
+              <span>Returns refresh daily at 4 PM IST · Smart Money = Score &lt;40 &amp; Return &gt;+8%</span>
             </div>
           </div>
         )}
