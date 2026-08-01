@@ -7,7 +7,7 @@ const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
 const sb = (p: string) => fetch(`${SB_URL}/rest/v1/${p}`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` }, cache: 'no-store' }).then(r => r.json());
 
-interface Signal { id: string; ticker: string; company_name: string|null; acquirer_name: string; transaction_type: 'BUY'|'SELL'; signal_date: string; insider_score: number; trade_value_in_cr: number|null; equity_pct_traded: number|null; ema150_distance_pct: number|null; cluster_trade_flag: boolean; tier: string; }
+interface Signal { id: string; ticker: string; company_name: string|null; acquirer_name: string; transaction_type: 'BUY'|'SELL'; signal_date: string; insider_score: number; trade_value_in_cr: number|null; equity_pct_traded: number|null; ema150_distance_pct: number|null; cluster_trade_flag: boolean; tier: string; promoter_historical_6m_return: number|null; }
 type SortKey = 'insider_score'|'signal_date'|'trade_value_in_cr';
 type SortDir = 'asc'|'desc';
 type Filter  = 'all'|'buy'|'sell'|'cluster'|'high';
@@ -100,14 +100,14 @@ export default function InsiderPage() {
                   <tr className="bg-[#161b22] border-b-2 border-slate-700">
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap">Ticker / Company</th>
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Type</th>
+                    <Th col="signal_date" label="Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}/>
                     <Th col="insider_score" label="Score" active={sortKey==='insider_score'} dir={sortDir} onSort={onSort} right/>
+                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Tier ↗</th>
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Acquirer</th>
                     <Th col="trade_value_in_cr" label="Value" active={sortKey==='trade_value_in_cr'} dir={sortDir} onSort={onSort} right/>
                     <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">% Equity</th>
                     <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">EMA150 Dist</th>
                     <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Cluster</th>
-                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Tier</th>
-                    <Th col="signal_date" label="Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}/>
                   </tr>
                 </thead>
                 <tbody>
@@ -126,14 +126,14 @@ export default function InsiderPage() {
                         <td className="px-3 py-2.5 whitespace-nowrap">
                           <span className={`text-xs font-bold flex items-center gap-1 ${isBuy?'text-emerald-400':'text-red-400'}`}>{isBuy?<TrendingUp className="w-3 h-3"/>:<TrendingDown className="w-3 h-3"/>}{s.transaction_type}</span>
                         </td>
+                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{fmtDate(s.signal_date)}</td>
                         <td className={`px-3 py-2.5 text-right whitespace-nowrap text-base font-black ${scoreCls}`}>{s.insider_score}</td>
+                        <td className="px-3 py-2.5 text-center whitespace-nowrap"><Link href={`/insider/${s.id}`} className={`text-[9px] font-bold px-1.5 py-0.5 rounded transition hover:opacity-75 ${tierCls}`}>{s.tier==='HIGH CONVICTION'?'HIGH CONV.':s.tier}</Link></td>
                         <td className="px-3 py-2.5 whitespace-nowrap text-slate-300 truncate max-w-[160px]">{s.acquirer_name}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap text-slate-300 font-medium">{s.trade_value_in_cr!=null?`₹${s.trade_value_in_cr.toFixed(1)}Cr`:'—'}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap text-slate-400">{s.equity_pct_traded!=null?`${s.equity_pct_traded.toFixed(3)}%`:'—'}</td>
                         <td className={`px-3 py-2.5 text-right whitespace-nowrap ${s.ema150_distance_pct==null?'text-slate-600':s.ema150_distance_pct<=10?'text-emerald-400':'text-amber-400'}`}>{s.ema150_distance_pct!=null?`+${s.ema150_distance_pct.toFixed(1)}%`:'—'}</td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap">{s.cluster_trade_flag?<span className="text-[10px] font-bold bg-violet-500/20 text-violet-400 border border-violet-500/30 px-1.5 py-0.5 rounded">🔗 YES</span>:<span className="text-slate-700">—</span>}</td>
-                        <td className="px-3 py-2.5 text-center whitespace-nowrap"><span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${tierCls}`}>{s.tier==='HIGH CONVICTION'?'HIGH CONV.':s.tier}</span></td>
-                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{fmtDate(s.signal_date)}</td>
                       </tr>
                     );
                   })}
