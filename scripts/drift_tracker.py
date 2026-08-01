@@ -1,155 +1,118 @@
 """
-Drift Tracker — calculates T+1, T+5, T+20 returns for all PEAD signals.
+Drift Tracker v2 — updates returns_since_result and daily_return for ALL signals.
+Also fills T+1, T+5, T+20 when enough time has elapsed.
 
-Runs daily at 10:45 UTC (4:15 PM IST).
-Fetches signals from Supabase, computes returns using yfinance close prices,
-and updates drift_performance rows.
+Runs: Mon-Fri at 10:45 UTC (4:15 PM IST).
 """
 
 import os, time
 from datetime import date, timedelta
-import pandas as pd
 import yfinance as yf
 from supabase import create_client, Client
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-TRADING_DAYS = {1: "t_1_return", 5: "t_5_return", 20: "t_20_return"}
 
-
-def get_trading_day_price(ticker_ns: str, signal_date: date, n_trading_days: int) -> float | None:
+def fetch_price_series(ticker_ns: str, from_date: date) -> dict:
     """
-    Returns the closing price on the Nth trading day after signal_date,
-    or None if data isn't available yet.
+    Returns dict of date_str -> close price for all dates from from_date.
+    Also returns prev_close and current_close.
     """
+    out = dict(series={}, current=None, prev=None, base=None)
     try:
-        # Fetch a generous window — n_days * 1.6 calendar days covers weekends/holidays
-        start = signal_date + timedelta(days=1)
-        end   = signal_date + timedelta(days=int(n_trading_days * 1.6) + 10)
-
-        if end > date.today():
-            end = date.today()
-
-        df = yf.download(ticker_ns, start=start.isoformat(), end=end.isoformat(),
-                         interval="1d", auto_adjust=True, progress=False)
-        if df.empty or len(df) < n_trading_days:
-            return None
-
-        closes = df["Close"].squeeze()
-        return float(closes.iloc[n_trading_days - 1])
-    except Exception as e:
-        print(f"  [price] {ticker_ns} T+{n_trading_days}: {e}")
-        return None
-
-
-def get_signal_day_close(ticker_ns: str, signal_date: date) -> float | None:
-    """Returns the closing price ON the signal_date (base price for return calc)."""
-    try:
-        next_day = signal_date + timedelta(days=1)
-        df = yf.download(ticker_ns, start=signal_date.isoformat(), end=next_day.isoformat(),
+        # Fetch from result date onwards (need full history for base price too)
+        start = from_date - timedelta(days=1)  # one day before to get the base
+        df = yf.download(ticker_ns, start=start.isoformat(),
                          interval="1d", auto_adjust=True, progress=False)
         if df.empty:
-            return None
-        return float(df["Close"].squeeze().iloc[-1])
+            return out
+
+        close = df["Close"].squeeze()
+
+        # Base price = close on or after from_date
+        # (on the result day itself or first trading day after)
+        base_series = close[close.index.date >= from_date]
+        if not base_series.empty:
+            out["base"] = float(base_series.iloc[0])
+
+        out["current"] = float(close.iloc[-1])
+        out["prev"]    = float(close.iloc[-2]) if len(close) >= 2 else None
+
+        # Build series indexed by date string for T+N lookups
+        for i, (idx, val) in enumerate(close.items()):
+            d = idx.date() if hasattr(idx, 'date') else idx
+            if d >= from_date:
+                out["series"][i] = float(val)  # 0 = first day on/after result
     except Exception as e:
-        print(f"  [base price] {ticker_ns}: {e}")
-        return None
-
-
-def pct_return(base: float | None, target: float | None) -> float | None:
-    if base is None or target is None or base == 0:
-        return None
-    return round((target - base) / base * 100, 4)
+        print(f"  [price] {ticker_ns}: {e}")
+    return out
 
 
 def main():
     today = date.today()
-    print(f"=== Drift Tracker {today} ===")
+    print(f"=== Drift Tracker v2 — {today} ===")
 
-    # Fetch all active signals
+    # Fetch ALL signals (active + recent expired) with their existing drift row
     resp = supabase.table("pead_signals") \
         .select("id, ticker, signal_date") \
-        .eq("status", "active") \
+        .gte("signal_date", (today - timedelta(days=60)).isoformat()) \
         .order("signal_date", desc=True) \
         .execute()
 
     signals = resp.data or []
-    print(f"[db] {len(signals)} active signals to process")
+    print(f"[db] {len(signals)} signals to update")
 
     for sig in signals:
         sig_id   = sig["id"]
         ticker   = sig["ticker"]
         sig_date = date.fromisoformat(sig["signal_date"])
-        ticker_ns = ticker + ".NS" if not ticker.endswith(".NS") else ticker
+        ns       = ticker if ticker.endswith(".NS") else ticker + ".NS"
 
-        print(f"\n→ {ticker} (signal: {sig_date})")
+        print(f"\n→ {ticker} ({sig_date})")
 
-        # Fetch existing drift row
-        existing = supabase.table("drift_performance") \
-            .select("*") \
-            .eq("signal_id", sig_id) \
-            .execute()
-        existing_row = existing.data[0] if existing.data else {}
+        prices = fetch_price_series(ns, sig_date)
+        time.sleep(0.8)
 
-        # Base price (close on signal day)
-        base_price = get_signal_day_close(ticker_ns, sig_date)
-        time.sleep(0.5)
+        base    = prices["base"]
+        current = prices["current"]
+        prev    = prices["prev"]
+        series  = prices["series"]
 
-        if base_price is None:
-            print(f"  No base price — skipping")
+        if base is None or current is None:
+            print("  no price data — skipping")
             continue
 
-        updates: dict = {}
+        updates: dict = {
+            "returns_since_result": round((current - base) / base * 100, 4),
+            "daily_return":         round((current - prev) / prev * 100, 4) if prev else None,
+            "updated_at":           "now()",
+        }
 
-        for n_days, col in TRADING_DAYS.items():
-            # Skip columns already filled
-            if existing_row.get(col) is not None:
-                print(f"  T+{n_days}: already recorded ({existing_row[col]:+.2f}%), skipping")
-                continue
+        # T+1, T+5, T+20 — fill only when we have enough data
+        for n, col in [(1, "t_1_return"), (5, "t_5_return"), (20, "t_20_return")]:
+            if n in series:
+                target = series[n]
+                updates[col] = round((target - base) / base * 100, 4)
 
-            # Check if enough trading days have elapsed
-            min_calendar_days = int(n_days * 1.5)
-            if (today - sig_date).days < min_calendar_days:
-                print(f"  T+{n_days}: not yet ({(today - sig_date).days} calendar days elapsed, need ~{min_calendar_days})")
-                continue
-
-            target_price = get_trading_day_price(ticker_ns, sig_date, n_days)
-            time.sleep(1)
-            ret = pct_return(base_price, target_price)
-
-            if ret is not None:
-                updates[col] = ret
-                print(f"  T+{n_days}: {ret:+.2f}%")
-            else:
-                print(f"  T+{n_days}: price not yet available")
-
-        if not updates:
-            continue
+        ret_pct = updates["returns_since_result"]
+        print(f"  returns_since={ret_pct:+.2f}%  daily={updates['daily_return']}")
 
         # Upsert drift_performance
-        if existing_row:
-            supabase.table("drift_performance") \
-                .update({**updates, "updated_at": "now()"}) \
-                .eq("signal_id", sig_id) \
-                .execute()
-        else:
-            supabase.table("drift_performance") \
-                .insert({"signal_id": sig_id, **updates}) \
-                .execute()
+        supabase.table("drift_performance").upsert(
+            {"signal_id": sig_id, **updates}, on_conflict="signal_id"
+        ).execute()
 
-        print(f"  ✓ Updated: {list(updates.keys())}")
-
-    # Mark signals older than 30 days as expired
-    cutoff = (today - timedelta(days=30)).isoformat()
+    # Expire signals > 60 days old
+    cutoff = (today - timedelta(days=60)).isoformat()
     supabase.table("pead_signals") \
-        .update({"status": "expired"}) \
-        .eq("status", "active") \
+        .update({"trigger_path": "NONE"}) \
         .lt("signal_date", cutoff) \
+        .eq("trigger_path", "A") \
         .execute()
-    print(f"\n[cleanup] Signals before {cutoff} marked expired")
+
+    print(f"\n[done] all signals updated")
 
 
 if __name__ == "__main__":
