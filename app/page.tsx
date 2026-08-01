@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { TrendingUp, TrendingDown, RefreshCw, BarChart2, PieChart, Target, BookOpen, Eye, Wallet, Zap } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, BarChart2, PieChart, Target, BookOpen, Eye, Wallet, Zap, Layers } from 'lucide-react';
 
 const fmtAbs = (n: number) =>
   Math.abs(n) >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr`
@@ -48,6 +48,16 @@ const NAV_CARDS = [
     iconColor: 'text-amber-400',
     badge: 'Live',
     badgeColor: 'bg-amber-500/20 text-amber-300',
+  },
+  {
+    href: '/stage2',
+    icon: Layers,
+    title: 'Stage 2 Hub',
+    description: 'Weinstein / Minervini / SOIC structural breakout scanner — 0–100 score across 5 factors. Triple Play flags PEAD + Stage 2 confluences.',
+    color: 'from-blue-600/20 to-blue-800/10 border-blue-500/30 hover:border-blue-400/50',
+    iconColor: 'text-blue-400',
+    badge: 'Live',
+    badgeColor: 'bg-blue-500/20 text-blue-300',
   },
   {
     href: '#',
