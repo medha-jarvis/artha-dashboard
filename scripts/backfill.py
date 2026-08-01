@@ -47,8 +47,8 @@ def get_nse_results(session: requests.Session, from_date: date, to_date: date) -
     """
     fd = from_date.strftime("%d-%m-%Y")
     td = to_date.strftime("%d-%m-%Y")
-    url = (f"https://www.nseindia.com/api/corporates-financial-results"
-           f"?index=equities&period=Quarterly&from_date={fd}&to_date={td}")
+    # Try current quarter first (Q1 FY27 = Apr-Jun 2026), then filter by broadCastDate
+    url = "https://www.nseindia.com/api/corporates-financial-results?index=equities&period=Quarterly&year=2026-27&quarter=Q1"
     try:
         r = session.get(url, timeout=20)
         data = r.json()
@@ -184,17 +184,22 @@ def main():
     from collections import defaultdict
     by_date: dict[str, list[dict]] = defaultdict(list)
     for item in nse_data:
+        # NSE API uses broadCastDate (camelCase with capital C) and includes timestamp
         symbol = (item.get("symbol") or item.get("SYMBOL") or "").strip().upper()
-        bdate  = (item.get("broadcastDate") or item.get("BROADCAST_DATE") or "").strip()
+        bdate  = (item.get("broadCastDate") or item.get("broadcastDate") or
+                  item.get("BROADCAST_DATE") or "").strip()
         cname  = (item.get("companyName") or item.get("COMPANY_NAME") or symbol).strip()
 
         if not symbol or not bdate:
             continue
 
+        # NSE format: "30-Jul-2026 17:17:53" — take date part only
+        bdate_date_part = bdate.split()[0] if " " in bdate else bdate
+
         # Convert DD-MMM-YYYY to YYYY-MM-DD
         try:
             from datetime import datetime as dt
-            parsed = dt.strptime(bdate, "%d-%b-%Y").date()
+            parsed = dt.strptime(bdate_date_part, "%d-%b-%Y").date()
             if from_date <= parsed <= to_date:
                 by_date[parsed.isoformat()].append({
                     "ticker":       symbol,
