@@ -44,9 +44,11 @@ export async function POST(
     const path = resolvedParams.path.join('/');
     const url = `${API_BASE}/${path}`;
 
+    const body = await request.text().catch(() => '');
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: body || undefined,
     });
 
     if (!response.ok) {

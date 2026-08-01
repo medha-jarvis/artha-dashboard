@@ -110,7 +110,7 @@ export default function PEADPage() {
   const dispatch = async (script: string) => {
     setTriggering(script); setTrigMsg('');
     try {
-      const r = await fetch('/api/proxy/pead/trigger', {
+      const r = await fetch('/api/pead-trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ script }),
