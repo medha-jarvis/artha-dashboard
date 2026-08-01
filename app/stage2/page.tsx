@@ -453,7 +453,7 @@ export default function Stage2Page() {
               </table>
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} setups · 🔥 PEAD+S2 = Triple Play · ⚡ DIVERGENCE = Smart Money accumulation</span>
+              <span>{sorted.length} setups · Ticker → Screener.in · TV → TradingView · 🔥 PEAD+S2 = Triple Play · ⚡ DIVERGENCE = Smart Money</span>
               <span>Scans 3:45 PM IST · Returns T+5/T+20/T+60 tracked</span>
             </div>
           </div>

@@ -415,7 +415,7 @@ export default function PEADPage() {
               </table>
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} of {signals.length} signals · Ticker links → StockScans</span>
+              <span>{sorted.length} of {signals.length} signals · Ticker links → Screener.in</span>
               <span>Returns refresh daily at 4 PM IST · Smart Money = Score &lt;40 &amp; Return &gt;+8%</span>
             </div>
           </div>
