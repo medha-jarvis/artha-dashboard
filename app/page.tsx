@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
-import { RefreshCw, Zap, Layers, Eye, AlertCircle, ChevronUp, ChevronDown, TrendingUp, TrendingDown } from 'lucide-react';
+import { RefreshCw, Zap, Layers, Eye, AlertCircle, ChevronUp, ChevronDown, TrendingUp, TrendingDown, BarChart2, Target, BookOpen, Wallet } from 'lucide-react';
 
 // ── Supabase REST ─────────────────────────────────────────────────────────────
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
@@ -121,17 +121,29 @@ function Th({ col, label, right, active, dir, onSort }:
   );
 }
 
-// ── Engine nav card ────────────────────────────────────────────────────────────
-function EngineCard({ icon, title, href, count, border }: { icon: React.ReactNode; title: string; href: string; count: number; border: string }) {
-  return (
-    <Link href={href} className={`bg-slate-900 border ${border} rounded-xl p-4 flex items-center gap-3 hover:opacity-80 transition`}>
-      <div className="shrink-0">{icon}</div>
-      <div>
-        <div className="text-[10px] text-slate-500 uppercase tracking-wider">{title}</div>
-        <div className="text-xl font-black text-white mt-0.5">{count} <span className="text-xs text-slate-500 font-normal">signals</span></div>
+// ── Full nav card (matches original Artha style) ──────────────────────────────
+interface NavCard { href: string; icon: React.ElementType; title: string; desc: string; color: string; iconColor: string; badge: string; badgeColor: string; live: boolean; sigCount?: number; }
+
+function NavCard({ card }: { card: NavCard }) {
+  const Icon = card.icon;
+  const inner = (
+    <div className={`bg-gradient-to-br ${card.color} border rounded-2xl p-5 h-full transition-all duration-200 ${card.live ? 'group hover:scale-[1.02] cursor-pointer' : 'opacity-55 cursor-not-allowed'}`}>
+      <div className="flex items-start justify-between mb-3">
+        <Icon className={`w-6 h-6 ${card.iconColor}`} />
+        <div className="flex items-center gap-1.5">
+          {card.sigCount != null && card.live && (
+            <span className="text-xs font-bold text-white/70">{card.sigCount}</span>
+          )}
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${card.badgeColor}`}>{card.badge}</span>
+        </div>
       </div>
-    </Link>
+      <div className={`font-bold text-white text-lg mb-1 ${card.live ? 'group-hover:text-white/90 transition-colors' : ''}`}>{card.title}</div>
+      <div className="text-slate-400 text-sm leading-snug">{card.desc}</div>
+    </div>
   );
+  return card.live
+    ? <Link href={card.href} className="block h-full">{inner}</Link>
+    : <div className="h-full">{inner}</div>;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -354,21 +366,17 @@ export default function ConfluenceHub() {
           </div>
         )}
 
-        {/* ── Engine nav cards ── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <EngineCard icon={<Zap className="w-5 h-5 text-amber-400"/>}   title="PEAD Engine"     href="/pead"     count={peadTotal} border="border-amber-500/30 hover:border-amber-400/50"/>
-          <EngineCard icon={<Layers className="w-5 h-5 text-blue-400"/>} title="Stage 2 Hub"     href="/stage2"   count={s2Total}   border="border-blue-500/30 hover:border-blue-400/50"/>
-          <EngineCard icon={<Eye className="w-5 h-5 text-violet-400"/>}  title="Insider Intel"   href="/insider"  count={insTotal}  border="border-violet-500/30 hover:border-violet-400/50"/>
-          <div className="bg-[#0d1117] border border-orange-500/30 rounded-xl p-4 flex items-center gap-3">
-            <span className="text-2xl">🔥</span>
-            <div>
-              <div className="text-[10px] text-slate-500 uppercase tracking-wider">Triple Play</div>
-              <div className="text-xl font-black text-orange-300 mt-0.5">
-                {tripleCount} <span className="text-xs font-normal text-slate-500">tickers</span>
-              </div>
-              {exitCount > 0 && <div className="text-[10px] text-red-400 mt-0.5">⚠️ {exitCount} exit signal{exitCount>1?'s':''}</div>}
-            </div>
-          </div>
+        {/* ── Navigation cards ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {([
+            { href:'/portfolio',  icon:BarChart2,  title:'Portfolio',           desc:'Holdings, IRR, TWRR benchmarks, sector allocation, NAV chart',                                      color:'from-emerald-600/20 to-emerald-800/10 border-emerald-500/30 hover:border-emerald-400/50', iconColor:'text-emerald-400', badge:'Live',  badgeColor:'bg-emerald-500/20 text-emerald-300', live:true },
+            { href:'/pead',       icon:Zap,        title:'PEAD Engine',         desc:'Post-earnings drift · Path A (beat) · Path B (trap) · T+1/T+5/T+20 tracking',                    color:'from-amber-600/20 to-amber-800/10 border-amber-500/30 hover:border-amber-400/50',   iconColor:'text-amber-400',   badge:'Live',  badgeColor:'bg-amber-500/20 text-amber-300',   live:true,  sigCount:peadTotal  },
+            { href:'/stage2',     icon:Layers,     title:'Stage 2 Hub',         desc:'Weinstein · Minervini · SOIC structural breakout scanner · 0–100 score · 5 PM IST',             color:'from-blue-600/20 to-blue-800/10 border-blue-500/30 hover:border-blue-400/50',       iconColor:'text-blue-400',    badge:'Live',  badgeColor:'bg-blue-500/20 text-blue-300',     live:true,  sigCount:s2Total     },
+            { href:'/insider',    icon:Eye,        title:'Insider Intel',        desc:'NSE PIT disclosures · Promoter & Director open-market buys/sells · cluster flags',               color:'from-violet-600/20 to-violet-800/10 border-violet-500/30 hover:border-violet-400/50', iconColor:'text-violet-400',  badge:'Live',  badgeColor:'bg-violet-500/20 text-violet-300', live:true,  sigCount:insTotal    },
+            { href:'#',           icon:Target,     title:'Goals',               desc:'Financial goals tracker — retirement, home, education, corpus planning',                          color:'from-cyan-600/20 to-cyan-800/10 border-cyan-500/30',                                   iconColor:'text-cyan-400',    badge:'Soon',  badgeColor:'bg-cyan-500/20 text-cyan-300',     live:false },
+            { href:'#',           icon:Wallet,     title:'Tax & P&L',           desc:'Capital gains, tax-loss harvesting, realized P&L across all holdings',                           color:'from-rose-600/20 to-rose-800/10 border-rose-500/30',                                   iconColor:'text-rose-400',    badge:'Soon',  badgeColor:'bg-rose-500/20 text-rose-300',     live:false },
+            { href:'#',           icon:BookOpen,   title:'Research',            desc:'Stock thesis tracker, smart money moves, institutional research notes',                          color:'from-indigo-600/20 to-indigo-800/10 border-indigo-500/30',                             iconColor:'text-indigo-400',  badge:'Soon',  badgeColor:'bg-indigo-500/20 text-indigo-300', live:false },
+          ] as NavCard[]).map(card => <NavCard key={card.title} card={card} />)}
         </div>
 
         {/* ── Filter pills ── */}
@@ -540,12 +548,7 @@ export default function ConfluenceHub() {
           </div>
         )}
 
-        {/* ── Bottom nav ── */}
-        <div className="flex flex-wrap gap-4 text-xs text-slate-600 pb-2">
-          {[['⚡ PEAD Engine','/pead'],['🏔️ Stage 2 Hub','/stage2'],['🕵️ Insider Intel','/insider'],['📊 Portfolio','/portfolio']].map(([l,h])=>(
-            <Link key={h} href={h} className="hover:text-slate-300 transition">{l}</Link>
-          ))}
-        </div>
+        <div className="pb-2" />
 
       </div>
     </div>
