@@ -18,6 +18,11 @@ const cutoffDate = () => {
   const d = new Date(); d.setDate(d.getDate() - CUTOFF_DAYS);
   return d.toISOString().slice(0, 10);
 };
+// Insider trades are less frequent — use 6-month lookback
+const insiderCutoffDate = () => {
+  const d = new Date(); d.setDate(d.getDate() - 180);
+  return d.toISOString().slice(0, 10);
+};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PeadRow   { ticker: string; pead_score: number; trigger_path: string; signal_date: string; returns_since_result?: number | null; }
@@ -169,7 +174,7 @@ export default function ConfluenceHub() {
       const [peadRaw, s2Raw, insRaw] = await Promise.all([
         sb(`pead_signals?select=id,ticker,pead_score,trigger_path,signal_date&signal_date=gte.${cutoff}&pead_score=gte.70&order=pead_score.desc`),
         sb(`stage2_signals?select=id,ticker,stage2_score,tier,days_in_stage2,signal_date&signal_date=gte.${cutoff}&stage2_score=gte.75&order=stage2_score.desc`),
-        sb(`insider_signals?select=ticker,company_name,insider_score,transaction_type,acquirer_name,trade_value_in_cr,promoter_historical_6m_return,tier,signal_date&signal_date=gte.${cutoff}&insider_score=gte.75&order=insider_score.desc`),
+        sb(`insider_signals?select=ticker,company_name,insider_score,transaction_type,acquirer_name,trade_value_in_cr,promoter_historical_6m_return,tier,signal_date&signal_date=gte.${insiderCutoffDate()}&insider_score=gte.50&order=insider_score.desc`),
       ]) as [PeadRow[], Stage2Row[], InsiderRow[]];
 
       // Validate
@@ -415,7 +420,7 @@ export default function ConfluenceHub() {
               <table className="w-full text-xs border-collapse" style={{ minWidth: '1300px' }}>
                 <thead className="sticky top-0 z-20">
                   <tr className="bg-[#161b22] border-b-2 border-slate-700">
-                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap min-w-[160px]">
+                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap min-w-[90px] max-w-[110px]">
                       Ticker
                     </th>
                     <Th col="badge_priority" label="Trinity Signal" active={sortKey==='badge_priority'} dir={sortDir} onSort={onSort} />
@@ -443,7 +448,7 @@ export default function ConfluenceHub() {
                           <a href={`https://www.screener.in/company/${row.ticker}/`} target="_blank" rel="noopener noreferrer"
                             className="font-bold text-white hover:text-blue-400 transition">{row.ticker}</a>
                           {row.company_name && (
-                            <div className="text-slate-500 text-[10px] truncate max-w-[140px] mt-0.5">{row.company_name}</div>
+                            <div className="text-slate-500 text-[10px] truncate max-w-[90px] mt-0.5">{row.company_name}</div>
                           )}
                         </td>
 

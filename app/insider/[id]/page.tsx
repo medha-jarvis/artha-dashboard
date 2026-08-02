@@ -31,6 +31,9 @@ interface Signal {
   cluster_trade_flag: boolean;
   tier: string;
   promoter_historical_6m_return: number | null;
+  actual_return_3m: number | null;
+  actual_return_6m: number | null;
+  actual_return_1y: number | null;
 }
 
 interface ReturnData {
@@ -50,54 +53,74 @@ function fmtDate(s: string) {
   return new Date(s + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
 }
 
-function computeBreakdown(s: Signal) {
-  const cr = s.trade_value_in_cr ?? 0;
-  const ep = s.equity_pct_traded ?? null;
-  const hr = s.promoter_historical_6m_return ?? null;
+// Mirrors insider_engine.py v2 scoring: Magnitude 20 + Credibility 60 + Context 20 = 100
+function computeBreakdown(s: Signal, allAcquirerSignals: Signal[]) {
+  const cr  = s.trade_value_in_cr ?? 0;
+  const ep  = s.equity_pct_traded ?? null;
   const ema = s.ema150_distance_pct ?? null;
-  const tx = s.transaction_type;
+  const tx  = s.transaction_type;
 
-  let mag = 10, magReason = `₹${cr.toFixed(1)}Cr — below ₹1Cr threshold`;
+  // Magnitude: 20pts
+  let mag = 6, magReason = `₹${cr.toFixed(1)}Cr — below ₹1Cr threshold`;
   if (cr > 5 || (ep && ep > 1)) {
-    mag = 30;
+    mag = 20;
     magReason = cr > 5
       ? `₹${cr.toFixed(1)}Cr trade — above ₹5Cr high-conviction threshold`
       : `${ep?.toFixed(3)}% of free float — above 1% threshold`;
   } else if (cr > 1 || (ep && ep > 0.5)) {
-    mag = 20;
+    mag = 13;
     magReason = `₹${cr.toFixed(1)}Cr trade — moderate size (₹1–5Cr range)`;
   }
 
-  let cred = 20, credReason = 'First signal for this acquirer+stock — neutral starting credibility (20/40)';
-  if (hr !== null) {
-    if (tx === 'BUY') {
-      if (hr > 40) { cred = 40; credReason = `Past calls in this stock averaged +${hr.toFixed(1)}% in 6m — strong track record`; }
-      else if (hr > 20) { cred = 25; credReason = `Past calls in this stock averaged +${hr.toFixed(1)}% in 6m — decent track record`; }
-      else { cred = 10; credReason = `Past calls in this stock averaged +${hr.toFixed(1)}% in 6m — weak track record`; }
-    } else {
-      if (hr < -20) { cred = 40; credReason = `Past SELL calls averaged ${hr.toFixed(1)}% in 6m — sharp SELL track record`; }
-      else if (hr < -10) { cred = 25; credReason = `Past SELL calls averaged ${hr.toFixed(1)}% in 6m — decent SELL track record`; }
-      else { cred = 10; credReason = `Past SELL calls averaged ${hr.toFixed(1)}% in 6m — weak SELL track record`; }
-    }
+  // Credibility: 60pts — based on actual past returns (3m/6m/1y) across all trades by this acquirer
+  const past = allAcquirerSignals.filter(h => h.id !== s.id);
+  const r3   = past.map(h => h.actual_return_3m).filter((v): v is number => v !== null);
+  const r6   = past.map(h => h.actual_return_6m).filter((v): v is number => v !== null);
+  const r1y  = past.map(h => h.actual_return_1y).filter((v): v is number => v !== null);
+  const m    = tx === 'BUY' ? 1 : -1;
+
+  function credPts(vals: number[], neutral: number, thresholds: [number, number][]): number {
+    if (vals.length === 0) return neutral;
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length * m;
+    for (const [thresh, pts] of thresholds) { if (avg >= thresh) return pts; }
+    return 0;
   }
 
+  const s3   = credPts(r3,  10, [[15, 20], [8, 12], [0, 5]]);   // 20pt max
+  const s6   = credPts(r6,  12, [[25, 25], [12, 15], [0, 6]]);  // 25pt max
+  const s1y  = credPts(r1y,  8, [[40, 15], [20, 9], [0, 4]]);   // 15pt max
+  const cred = s3 + s6 + s1y;
+
+  let credReason: string;
+  if (past.length === 0) {
+    credReason = 'No prior signals from this acquirer — neutral (30/60)';
+  } else if (r3.length === 0 && r6.length === 0) {
+    credReason = `${past.length} prior signal(s) — returns pending (signals < 3 months old)`;
+  } else {
+    const avg6str = r6.length ? `avg 6m: ${(r6.reduce((a,b)=>a+b,0)/r6.length*m).toFixed(1)}%` : '';
+    credReason = `${past.length} prior signal(s) across all stocks${avg6str ? ', ' + avg6str : ''}`;
+  }
+  const neutralCred = 30;
+  const finalCred = past.length === 0 ? neutralCred : cred;
+
+  // Context: 20pts
   let ctx = 0, ctxReason = 'EMA-150 data unavailable at time of signal';
   if (ema !== null) {
     if (tx === 'BUY') {
-      if (ema <= 10) { ctx = 30; ctxReason = `Stock was only +${ema.toFixed(1)}% above EMA-150 — ideal buy zone (≤10% = near base)`; }
-      else if (ema <= 20) { ctx = 15; ctxReason = `Stock was +${ema.toFixed(1)}% above EMA-150 — acceptable buy zone (10–20%)`; }
-      else { ctx = 0; ctxReason = `Stock was +${ema.toFixed(1)}% above EMA-150 — extended, not ideal for buys`; }
+      if (ema <= 10)      { ctx = 20; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — ideal buy zone (≤10%)`; }
+      else if (ema <= 20) { ctx = 10; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — acceptable buy zone (10–20%)`; }
+      else                { ctx =  0; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — extended, not ideal for buys`; }
     } else {
-      if (ema >= 20) { ctx = 30; ctxReason = `Stock was +${ema.toFixed(1)}% above EMA-150 — ideal sell zone (≥20% extended)`; }
-      else if (ema >= 10) { ctx = 15; ctxReason = `Stock was +${ema.toFixed(1)}% above EMA-150 — acceptable sell zone (10–20%)`; }
-      else { ctx = 0; ctxReason = `Stock was +${ema.toFixed(1)}% above EMA-150 — near base, not ideal for sells`; }
+      if (ema >= 20)      { ctx = 20; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — ideal sell zone (≥20%)`; }
+      else if (ema >= 10) { ctx = 10; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — acceptable sell zone`; }
+      else                { ctx =  0; ctxReason = `+${ema.toFixed(1)}% above EMA-150 — near base, poor sell context`; }
     }
   }
 
   return [
-    { label: 'Magnitude', score: mag, max: 30, reason: magReason, color: mag === 30 ? '#10b981' : mag === 20 ? '#f59e0b' : '#475569' },
-    { label: 'Credibility', score: cred, max: 40, reason: credReason, color: cred >= 35 ? '#10b981' : cred >= 20 ? '#f59e0b' : '#475569' },
-    { label: 'Context', score: ctx, max: 30, reason: ctxReason, color: ctx === 30 ? '#10b981' : ctx >= 15 ? '#f59e0b' : '#475569' },
+    { label: 'Magnitude',   score: mag,        max: 20, reason: magReason,   color: mag === 20 ? '#10b981' : mag === 13 ? '#f59e0b' : '#475569' },
+    { label: 'Credibility', score: finalCred,   max: 60, reason: credReason,  color: finalCred >= 45 ? '#10b981' : finalCred >= 25 ? '#f59e0b' : '#475569' },
+    { label: 'Context',     score: ctx,         max: 20, reason: ctxReason,   color: ctx === 20 ? '#10b981' : ctx >= 10 ? '#f59e0b' : '#475569' },
   ];
 }
 
@@ -128,7 +151,8 @@ export default function EvidencePage() {
         setSignal(sig);
 
         const [histData, tierData] = await Promise.all([
-          sb(`insider_signals?select=*&acquirer_name=eq.${encodeURIComponent(sig.acquirer_name)}&ticker=eq.${sig.ticker}&order=signal_date.desc&limit=20`),
+          // Search by acquirer name across ALL tickers — promoters trade multiple group stocks
+          sb(`insider_signals?select=*&acquirer_name=eq.${encodeURIComponent(sig.acquirer_name)}&order=signal_date.desc&limit=30`),
           sb(`insider_signals?select=*&tier=eq.${encodeURIComponent(sig.tier)}&order=insider_score.desc&limit=300`),
         ]);
         const hist: Signal[] = Array.isArray(histData) ? histData.filter((h: Signal) => h.id !== sig.id) : [];
@@ -180,7 +204,7 @@ export default function EvidencePage() {
     </div>
   );
 
-  const breakdown = computeBreakdown(signal);
+  const breakdown = computeBreakdown(signal, history);
   const isBuy = signal.transaction_type === 'BUY';
   const tierCls = signal.tier === 'HIGH CONVICTION'
     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -331,12 +355,12 @@ export default function EvidencePage() {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <div>
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">Acquirer Track Record</h2>
-            <p className="text-[11px] text-slate-500 mt-1">{signal.acquirer_name} · all past signals in {signal.ticker}</p>
+            <p className="text-[11px] text-slate-500 mt-1">{signal.acquirer_name} · all signals across all stocks in DB (drives credibility score)</p>
           </div>
           {history.length === 0 ? (
             <div className="py-6 text-center">
               <p className="text-slate-500 text-sm">No prior signals from this acquirer in {signal.ticker}.</p>
-              <p className="text-slate-600 text-[11px] mt-1">Credibility scored as neutral (20/40) for first-time signals.</p>
+              <p className="text-slate-600 text-[11px] mt-1">No prior signals from this acquirer — credibility neutral (30/60). Returns accumulate from future trades.</p>
             </div>
           ) : (
             <>
@@ -344,7 +368,7 @@ export default function EvidencePage() {
                 <table className="w-full text-xs border-collapse" style={{ minWidth: 560 }}>
                   <thead>
                     <tr className="border-b border-slate-800">
-                      {['Date', 'Type', '₹Cr', 'Score', 'Tier', '30d', '90d', '6m', 'Current'].map(h => (
+                      {['Date', 'Stock', 'Type', '₹Cr', 'Score', 'Tier', '30d', '90d', '6m', 'Current'].map(h => (
                         <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -358,6 +382,7 @@ export default function EvidencePage() {
                       return (
                         <tr key={h.id} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
                           <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{fmtDate(h.signal_date)}</td>
+                          <td className="px-3 py-2.5 font-bold text-slate-200 whitespace-nowrap">{h.ticker}</td>
                           <td className={`px-3 py-2.5 font-bold whitespace-nowrap ${hBuy ? 'text-emerald-400' : 'text-red-400'}`}>{h.transaction_type}</td>
                           <td className="px-3 py-2.5 text-slate-300 whitespace-nowrap">{h.trade_value_in_cr != null ? `₹${h.trade_value_in_cr.toFixed(1)}` : '—'}</td>
                           <td className={`px-3 py-2.5 font-black whitespace-nowrap ${hScoreCls}`}>{h.insider_score}</td>
@@ -461,7 +486,7 @@ export default function EvidencePage() {
           <div className="border-t border-slate-800 pt-3 space-y-1">
             <p className="text-[11px] text-slate-600">
               Scoring: Magnitude (30pt) · Credibility (40pt) · Technical Context (30pt).
-              Credibility accumulates as this acquirer&apos;s track record grows.
+              Credibility (60pt max) is based on actual 3m/6m/1y returns from all prior signals by this acquirer across all stocks. It accumulates over time.
             </p>
             {oldSigs.length === 0 && (
               <p className="text-[11px] text-slate-600 flex items-center gap-1.5">

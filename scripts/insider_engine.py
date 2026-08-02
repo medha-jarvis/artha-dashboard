@@ -145,16 +145,25 @@ def get_technicals(ticker: str) -> dict:
 
 # ── Credibility: actual past returns ───────────────────────────────────────────
 def get_past_returns(acquirer_name: str, ticker: str) -> list[dict]:
-    """Fetch actual return records from past signals for this acquirer+ticker."""
+    """Fetch actual return records from past signals for this acquirer across ALL tickers.
+    Promoters often trade multiple group companies; we want their full track record."""
     try:
         resp = sb.table("insider_signals") \
-            .select("actual_return_3m,actual_return_6m,actual_return_1y,transaction_type") \
+            .select("actual_return_3m,actual_return_6m,actual_return_1y,transaction_type,ticker") \
+            .eq("acquirer_name", acquirer_name) \
+            .not_.eq("ticker", ticker) \
+            .order("signal_date", desc=True) \
+            .limit(20) \
+            .execute()
+        # Also include same-ticker signals (excluding this exact signal by keeping older ones)
+        resp2 = sb.table("insider_signals") \
+            .select("actual_return_3m,actual_return_6m,actual_return_1y,transaction_type,ticker") \
             .eq("acquirer_name", acquirer_name) \
             .eq("ticker", ticker) \
             .order("signal_date", desc=True) \
             .limit(10) \
             .execute()
-        return resp.data or []
+        return (resp.data or []) + (resp2.data or [])
     except Exception:
         return []
 
