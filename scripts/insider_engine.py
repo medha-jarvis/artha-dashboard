@@ -1,15 +1,16 @@
 """
-Insider Intelligence Engine — tracks high-conviction open-market Buys AND Sells
-by Promoters, Directors, and Promoter Groups using NSE PIT (Prohibition of
-Insider Trading) disclosure data.
+Insider Intelligence Engine v2 — NSE PIT (Prohibition of Insider Trading) disclosures.
+Promoters, Directors, KMP — open-market trades only.
 
 Scoring (max 100):
-  Magnitude   (30): trade value / % equity traded
-  Credibility (40): simulated historical performance of this acquirer's past calls
-  Context     (30): price relative to 150 EMA (buy = near base, sell = extended)
+  Magnitude   (20): trade size — absolute (₹Cr) and % of free float
+  Credibility (60): actual past returns at 3m / 6m / 1y for this acquirer in this stock
+                    -- the primary signal; weights promoters who have historically called
+                       the market correctly vs. noise traders
+  Context     (20): price relative to 150-day EMA at time of trade
 
 Tiers: HIGH CONVICTION ≥75 | NOTABLE 50-74 | NOISE <50
-Runs: 12:30 UTC = 6:00 PM IST daily.
+Runs: Mon-Fri 6:00 PM IST via VPS cron (requires Indian IP for NSE PIT).
 """
 
 import os, time, json, requests
@@ -34,29 +35,30 @@ NSE_HEADERS = {
     "DNT": "1",
 }
 
-MIN_TRADE_VALUE = 5_000_000   # ₹50 Lakhs minimum
-EMA_PERIOD      = 150
+MIN_TRADE_VALUE  = 5_000_000   # ₹50 Lakhs minimum
+EMA_PERIOD       = 150
+VALID_CATEGORIES = {"Promoters", "Promoter Group", "Director", "Key Managerial Personnel"}
+VALID_MODES      = {"Market Purchase", "Market Sale"}
 
 
-# ── NSE PIT data ───────────────────────────────────────────────────────────────
-def fetch_pit_data() -> list[dict]:
-    """Fetch NSE PIT (insider trading) disclosures for equities."""
+# ── NSE session ─────────────────────────────────────────────────────────────────
+def get_nse_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(NSE_HEADERS)
-    # Establish session cookie
     try:
         session.get("https://www.nseindia.com", timeout=15)
         time.sleep(2)
-        session.get("https://www.nseindia.com/companies-listing/corporate-filings-insider-trading", timeout=15)
-        time.sleep(2)
+        session.get("https://www.nseindia.com/companies-listing/corporate-filings-insider-trading", timeout=10)
+        time.sleep(1)
     except Exception as e:
         print(f"[nse] session init: {e}")
+    return session
 
+
+def fetch_pit_today(session: requests.Session) -> list[dict]:
+    """Fetch today's PIT batch. Requires Indian IP — must run from VPS."""
     try:
-        r = session.get(
-            "https://www.nseindia.com/api/corporates-pit?index=equities",
-            timeout=20
-        )
+        r = session.get("https://www.nseindia.com/api/corporates-pit?index=equities", timeout=20)
         data = r.json()
         records = data if isinstance(data, list) else data.get("data", data.get("result", []))
         print(f"[nse] fetched {len(records)} PIT records")
@@ -66,45 +68,35 @@ def fetch_pit_data() -> list[dict]:
         return []
 
 
-# ── Filter & parse ─────────────────────────────────────────────────────────────
-VALID_CATEGORIES = {"Promoters", "Promoter Group", "Director", "Key Managerial Personnel"}
-VALID_MODES      = {"Market Purchase", "Market Sale"}
-
+# ── Parse & filter ──────────────────────────────────────────────────────────────
 def parse_record(rec: dict) -> dict | None:
-    """Extract and validate a single PIT record."""
     try:
         person_cat = (rec.get("personCategory") or rec.get("personCat") or "").strip()
-        mode       = (rec.get("modeOfAcquisition") or rec.get("modeOfAcq") or "").strip()
-
-        # Filter by person category and acquisition mode
+        mode       = (rec.get("modeOfAcquisition") or rec.get("acqMode") or "").strip()
         if not any(cat in person_cat for cat in VALID_CATEGORIES):
             return None
         if mode not in VALID_MODES:
             return None
 
-        # Transaction value
         val_raw = rec.get("secVal") or rec.get("transactionValue") or "0"
         try:
             trade_value = float(str(val_raw).replace(",", ""))
         except (ValueError, TypeError):
             trade_value = 0
-
         if trade_value < MIN_TRADE_VALUE:
             return None
 
-        # Determine BUY or SELL
         tx_type = "BUY" if "Purchase" in mode else "SELL"
 
-        # Parse date
-        date_str = rec.get("date") or rec.get("acqfromDt") or ""
-        try:
-            # NSE uses DD-MMM-YYYY or DD-MM-YYYY
-            try:   signal_date = dt.strptime(date_str, "%d-%b-%Y").date()
-            except: signal_date = dt.strptime(date_str, "%d-%m-%Y").date()
-        except Exception:
-            signal_date = date.today()
+        date_str = rec.get("date") or rec.get("acqfromDt") or rec.get("intimDt") or ""
+        signal_date = date.today()
+        for fmt in ("%d-%b-%Y %H:%M", "%d-%b-%Y", "%d-%m-%Y"):
+            try:
+                signal_date = dt.strptime(date_str.split()[0], fmt.split()[0]).date()
+                break
+            except (ValueError, AttributeError):
+                pass
 
-        # Shares traded
         try:
             secs_traded = float(str(rec.get("secAcq") or rec.get("secAcqNo") or "0").replace(",", ""))
         except (ValueError, TypeError):
@@ -116,7 +108,7 @@ def parse_record(rec: dict) -> dict | None:
             "acquirer_name":    (rec.get("acqName") or rec.get("acquirerName") or "").strip(),
             "transaction_type": tx_type,
             "signal_date":      signal_date.isoformat(),
-            "trade_value_cr":   round(trade_value / 1e7, 4),  # in Crores
+            "trade_value_cr":   round(trade_value / 1e7, 4),
             "secs_traded":      secs_traded,
             "person_category":  person_cat,
         }
@@ -125,55 +117,85 @@ def parse_record(rec: dict) -> dict | None:
         return None
 
 
-# ── Technical context ──────────────────────────────────────────────────────────
+# ── Technicals ──────────────────────────────────────────────────────────────────
 _tech_cache: dict[str, dict] = {}
 
 def get_technicals(ticker: str) -> dict:
-    """Returns ema150_distance_pct and shares_outstanding."""
     if ticker in _tech_cache:
         return _tech_cache[ticker]
-
     ns = ticker if ticker.endswith(".NS") else ticker + ".NS"
-    out = dict(ema150_dist=None, shares_out=None)
+    out = dict(ema150_dist=None, shares_out=None, base_price=None)
     try:
         t    = yf.Ticker(ns)
         hist = t.history(period="300d", interval="1d", auto_adjust=True)
-        time.sleep(0.8)
+        time.sleep(0.5)
         if hist.empty or len(hist) < EMA_PERIOD:
             return out
-        close    = hist["Close"].squeeze()
-        ema150   = float(close.ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
-        last_c   = float(close.iloc[-1])
-        out["ema150_dist"]  = round((last_c - ema150) / ema150 * 100, 2)
-        out["shares_out"]   = t.info.get("sharesOutstanding") or t.info.get("impliedSharesOutstanding")
+        close = hist["Close"].squeeze()
+        ema150 = float(close.ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1])
+        last_c = float(close.iloc[-1])
+        out["ema150_dist"] = round((last_c - ema150) / ema150 * 100, 2)
+        out["base_price"]  = round(last_c, 2)
+        out["shares_out"]  = t.info.get("sharesOutstanding") or t.info.get("impliedSharesOutstanding")
     except Exception as e:
         print(f"  [tech] {ns}: {e}")
     _tech_cache[ticker] = out
     return out
 
 
-# ── Historical credibility lookup (Supabase) ───────────────────────────────────
-def get_acquirer_history(acquirer_name: str, ticker: str) -> float | None:
-    """
-    Look up past insider_signals for this acquirer+ticker to simulate historical return.
-    Returns mean of promoter_historical_6m_return, or None if no history.
-    """
+# ── Credibility: actual past returns ───────────────────────────────────────────
+def get_past_returns(acquirer_name: str, ticker: str) -> list[dict]:
+    """Fetch actual return records from past signals for this acquirer+ticker."""
     try:
         resp = sb.table("insider_signals") \
-            .select("promoter_historical_6m_return") \
+            .select("actual_return_3m,actual_return_6m,actual_return_1y,transaction_type") \
             .eq("acquirer_name", acquirer_name) \
             .eq("ticker", ticker) \
-            .not_.is_("promoter_historical_6m_return", "null") \
+            .order("signal_date", desc=True) \
+            .limit(10) \
             .execute()
-        vals = [r["promoter_historical_6m_return"] for r in (resp.data or []) if r["promoter_historical_6m_return"] is not None]
-        return round(sum(vals) / len(vals), 2) if vals else None
+        return resp.data or []
     except Exception:
-        return None
+        return []
+
+
+def score_credibility(past: list[dict], tx_type: str) -> tuple[int, str]:
+    """
+    60-point credibility sub-score.
+    Weights: 3m (20pt) + 6m (25pt) + 1y (15pt).
+    For BUY: positive returns are good. For SELL: negative returns are good.
+    First-time/no return data: 30/60 (neutral).
+    """
+    if not past:
+        return 30, "No prior signals — neutral (30/60)"
+
+    r3  = [r["actual_return_3m"] for r in past if r.get("actual_return_3m") is not None]
+    r6  = [r["actual_return_6m"] for r in past if r.get("actual_return_6m") is not None]
+    r1y = [r["actual_return_1y"] for r in past if r.get("actual_return_1y") is not None]
+
+    m = 1 if tx_type == "BUY" else -1  # SELL: negative returns are correct calls
+
+    def pts(vals, neutral, thresholds):
+        if not vals:
+            return neutral
+        avg = (sum(vals) / len(vals)) * m
+        for thresh, p in thresholds:
+            if avg >= thresh:
+                return p
+        return 0
+
+    s3  = pts(r3,  10, [(15, 20), (8, 12), (0, 5)])   # 3m: max 20
+    s6  = pts(r6,  12, [(25, 25), (12, 15), (0, 6)])  # 6m: max 25 (highest weight)
+    s1y = pts(r1y,  8, [(40, 15), (20, 9), (0, 4)])   # 1y: max 15
+    total = s3 + s6 + s1y
+
+    n = len(past)
+    avg6_str = f"{sum(r6)/len(r6)*m:+.1f}%" if r6 else "pending"
+    return total, f"{n} prior signal(s), avg 6m: {avg6_str}"
 
 
 # ── Cluster flag ────────────────────────────────────────────────────────────────
-def check_cluster_flag(ticker: str, tx_type: str, signal_date: str) -> bool:
-    """True if ≥3 unique insiders traded in the same direction within 14 days."""
+def check_cluster(ticker: str, tx_type: str, signal_date: str) -> bool:
     try:
         cutoff = (date.fromisoformat(signal_date) - timedelta(days=14)).isoformat()
         resp = sb.table("insider_signals") \
@@ -182,62 +204,46 @@ def check_cluster_flag(ticker: str, tx_type: str, signal_date: str) -> bool:
             .eq("transaction_type", tx_type) \
             .gte("signal_date", cutoff) \
             .execute()
-        unique = {r["acquirer_name"] for r in (resp.data or [])}
-        return len(unique) >= 3
+        return len({r["acquirer_name"] for r in (resp.data or [])}) >= 3
     except Exception:
         return False
 
 
-# ── Scoring ─────────────────────────────────────────────────────────────────────
-def compute_insider_score(trade_cr: float, equity_pct: float | None,
-                           hist_return: float | None, ema_dist: float | None,
-                           tx_type: str) -> int:
-    score = 0
+# ── Composite score ─────────────────────────────────────────────────────────────
+def compute_score(trade_cr: float, equity_pct: float | None,
+                  cred: int, ema_dist: float | None, tx_type: str) -> int:
+    # Magnitude: 20pts
+    if trade_cr > 5 or (equity_pct and equity_pct > 1):     mag = 20
+    elif trade_cr > 1 or (equity_pct and equity_pct > 0.5): mag = 13
+    else:                                                     mag = 6
 
-    # 1. Magnitude (30 pts)
-    if trade_cr > 5 or (equity_pct and equity_pct > 1):    score += 30
-    elif trade_cr > 1 or (equity_pct and equity_pct > 0.5): score += 20
-    else:                                                     score += 10
-
-    # 2. Credibility (40 pts) — historical performance of this acquirer
-    if hist_return is None:
-        score += 20  # first-time = neutral
-    elif tx_type == "BUY":
-        if   hist_return > 40:  score += 40
-        elif hist_return > 20:  score += 25
-        else:                   score += 10
-    else:  # SELL
-        if   hist_return < -20: score += 40
-        elif hist_return < -10: score += 25
-        else:                   score += 10
-
-    # 3. Context (30 pts) — price relative to EMA150
+    # Context: 20pts
+    ctx = 0
     if ema_dist is not None:
-        if tx_type == "BUY" and ema_dist <= 10:   score += 30
-        elif tx_type == "BUY" and ema_dist <= 20:  score += 15
-        elif tx_type == "SELL" and ema_dist >= 20: score += 30
-        elif tx_type == "SELL" and ema_dist >= 10: score += 15
+        if tx_type == "BUY":
+            if   ema_dist <= 10: ctx = 20
+            elif ema_dist <= 20: ctx = 10
+        else:
+            if   ema_dist >= 20: ctx = 20
+            elif ema_dist >= 10: ctx = 10
 
-    return min(100, score)
+    return min(100, mag + cred + ctx)
 
 
-def tier_from_score(score: int, tx_type: str) -> str:
+def tier_from_score(score: int) -> str:
     if score >= 75: return "HIGH CONVICTION"
     if score >= 50: return "NOTABLE"
     return "NOISE"
 
 
-# ── Telegram ───────────────────────────────────────────────────────────────────
+# ── Telegram ────────────────────────────────────────────────────────────────────
 def send_telegram(alerts: list[dict]) -> None:
     if not TG_TOKEN or not TG_CHAT_ID or not alerts:
         return
     lines = [f"🕵️ *Insider Signals — {dt.now().strftime('%d %b %Y')}*"]
     for a in alerts:
-        emoji = "🟢 BUY" if a["tx"] == "BUY" else "🔴 SELL WARNING"
-        lines.append(
-            f"{emoji} *{a['ticker']}* — Score {a['score']}/100\n"
-            f"  {a['acquirer']} · ₹{a['value_cr']:.1f}Cr · {a['tier']}"
-        )
+        e = "🟢 BUY" if a["tx"] == "BUY" else "🔴 SELL"
+        lines.append(f"{e} *{a['ticker']}* — Score {a['score']}/100\n  {a['acquirer']} · ₹{a['val']:.1f}Cr · {a['tier']}")
     try:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
@@ -249,70 +255,55 @@ def send_telegram(alerts: list[dict]) -> None:
         print(f"[telegram] {e}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# ── Main ────────────────────────────────────────────────────────────────────────
 def main():
-    print(f"=== Insider Intelligence Engine — {TODAY} ===")
+    print(f"=== Insider Engine v2 — {TODAY} ===")
+    session = get_nse_session()
+    records = fetch_pit_today(session)
 
-    records = fetch_pit_data()
     if not records:
-        print("[main] no PIT data — exiting")
+        print("[main] no PIT data — is this running from Indian IP (VPS)?")
         return
 
-    parsed = []
-    for rec in records:
-        p = parse_record(rec)
-        if p:
-            parsed.append(p)
+    parsed = [p for rec in records if (p := parse_record(rec)) and p["ticker"]]
     print(f"[filter] {len(parsed)} qualifying trades (≥₹50L, promoter/director, market)")
 
-    alerts = []
-    processed = 0
-
+    alerts, processed = [], 0
     for p in parsed:
         ticker = p["ticker"]
-        if not ticker:
-            continue
+        print(f"  {ticker} | {p['acquirer_name'][:28]} | {p['transaction_type']} | ₹{p['trade_cr']:.1f}Cr", end="  ")
 
-        print(f"  {ticker} | {p['acquirer_name'][:30]} | {p['transaction_type']} | ₹{p['trade_cr']:.1f}Cr", end="  ")
+        tech = get_technicals(ticker)
+        past = get_past_returns(p["acquirer_name"], ticker)
 
-        tech   = get_technicals(ticker)
-        hist_r = get_acquirer_history(p["acquirer_name"], ticker)
-
-        # equity_pct_traded
         equity_pct = None
         if tech["shares_out"] and p["secs_traded"]:
             equity_pct = round(p["secs_traded"] / tech["shares_out"] * 100, 4)
 
-        score = compute_insider_score(
-            trade_cr    = p["trade_cr"],
-            equity_pct  = equity_pct,
-            hist_return = hist_r,
-            ema_dist    = tech["ema150_dist"],
-            tx_type     = p["transaction_type"],
-        )
-        tier = tier_from_score(score, p["transaction_type"])
-
-        print(f"→ score={score} tier={tier}")
+        cred, cred_reason = score_credibility(past, p["transaction_type"])
+        score = compute_score(p["trade_cr"], equity_pct, cred, tech["ema150_dist"], p["transaction_type"])
+        tier  = tier_from_score(score)
+        print(f"→ score={score} cred={cred}/60 tier={tier}")
 
         if score < 50:
-            continue  # Only store ≥50
+            continue
 
-        # Check cluster after we know this trade qualifies
-        cluster = check_cluster_flag(ticker, p["transaction_type"], p["signal_date"])
-
+        cluster = check_cluster(ticker, p["transaction_type"], p["signal_date"])
         row = {
-            "ticker":                       ticker,
-            "company_name":                 p["company_name"],
-            "acquirer_name":                p["acquirer_name"],
-            "transaction_type":             p["transaction_type"],
-            "signal_date":                  p["signal_date"],
-            "insider_score":                score,
-            "trade_value_in_cr":            p["trade_cr"],
-            "equity_pct_traded":            equity_pct,
-            "promoter_historical_6m_return": hist_r,
-            "ema150_distance_pct":          tech["ema150_dist"],
-            "cluster_trade_flag":           cluster,
-            "tier":                         tier,
+            "ticker":              ticker,
+            "company_name":        p["company_name"],
+            "acquirer_name":       p["acquirer_name"],
+            "transaction_type":    p["transaction_type"],
+            "signal_date":         p["signal_date"],
+            "insider_score":       score,
+            "trade_value_in_cr":   p["trade_cr"],
+            "equity_pct_traded":   equity_pct,
+            "ema150_distance_pct": tech["ema150_dist"],
+            "cluster_trade_flag":  cluster,
+            "tier":                tier,
+            "base_price":          tech["base_price"],
+            "person_category":     p["person_category"],
+            "secs_traded":         p["secs_traded"],
         }
         try:
             sb.table("insider_signals").upsert(
@@ -320,18 +311,13 @@ def main():
             ).execute()
             processed += 1
         except Exception as e:
-            print(f"    [db] upsert failed: {e}")
+            print(f"    [db] {e}")
             continue
 
         if score >= 75:
-            alerts.append({
-                "ticker":   ticker,
-                "tx":       p["transaction_type"],
-                "acquirer": p["acquirer_name"],
-                "value_cr": p["trade_cr"],
-                "score":    score,
-                "tier":     tier,
-            })
+            alerts.append({"ticker": ticker, "tx": p["transaction_type"],
+                           "acquirer": p["acquirer_name"], "val": p["trade_cr"],
+                           "score": score, "tier": tier})
 
     print(f"\n[done] {processed} signals stored | {len(alerts)} HIGH CONVICTION alerts")
     send_telegram(alerts)

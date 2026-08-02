@@ -52,7 +52,12 @@ def get_nifty500_tickers() -> list[str]:
             timeout=20
         )
         data = r.json()
-        tickers = [item["symbol"] for item in data.get("data", []) if item.get("symbol")]
+        # Filter out index entries ($NIFTY500 etc.) and non-equity symbols
+        tickers = [
+            item["symbol"] for item in data.get("data", [])
+            if item.get("symbol") and not item["symbol"].startswith("$")
+            and item["symbol"].replace("-", "").replace("&", "").replace("_", "").isalnum()
+        ]
         if len(tickers) > 100:
             print(f"[universe] NSE API: {len(tickers)} Nifty 500 constituents")
             return tickers
@@ -69,8 +74,8 @@ def get_nifty500_tickers() -> list[str]:
         "BRITANNIA","PIDILITIND","HAVELLS","MUTHOOTFIN","BALKRISIND","CROMPTON",
         "KPIL","KEI","POLYCAB","CUMMINSIND","BHEL","SIEMENS","ABB",
         "IRCTC","IRFC","RVNL","PVRINOX","ZOMATO","PAYTM","NYKAA",
-        "DMART","BAJAJ-AUTO","MOTHERSON","BOSCHLTD","HEROMOTOCO","TVSMOTORS",
-        "TVSMOTOR","M&M","ASHOKLEY","TATACOMM","MPHASIS","LTTS","PERSISTENT",
+        "DMART","BAJAJ-AUTO","MOTHERSON","BOSCHLTD","HEROMOTOCO","TVSMOTOR",
+        "M&M","ASHOKLEY","TATACOMM","MPHASIS","LTTS","PERSISTENT",
         "COFORGE","OFSS","KFINTECH","CDSL","MCX","BSE","ANGELONE","IIFL",
         "SHRIRAMFIN","BAJAJHLDNG","ICICIGI","HDFCLIFE","SBILIFE","NIACL",
         "CHOLAFIN","LICHSGFIN","RECLTD","PFC","IREDA","SJVN","NHPC",
@@ -80,7 +85,7 @@ def get_nifty500_tickers() -> list[str]:
         "AMBUJACEM","DALMIA","SHREECEM","JKCEMENT","HEIDELBERG",
         "DLF","OBEROIRLTY","PRESTIGE","BRIGADE","SOBHA","GODREJPROP",
         "TATACHEM","DEEPAKNTR","GNFC","COROMANDEL","PIIND","RALLIS",
-        "STAR","PVR","ZEEL","SUNTVNETWORK","INOXGREEN","KAYNES","DIXON",
+        "STAR","PVRINOX","ZEEL","KAYNES","DIXON",
         "VOLTAS","BLUESTARCO","AMBER","WHIRLPOOL",
         "PAGEIND","TRENT","ADITBISL","SHOPERSTOP","VEDL","NATIONALUM",
         "SUNTECK","MAXHEALTH","FORTIS","MEDANTA","ASTRAZEN",
