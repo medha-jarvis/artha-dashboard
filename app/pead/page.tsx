@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Zap, RefreshCw, AlertCircle, ChevronUp, ChevronDown } from 'lucide-react';
+import { InfoTooltip } from '../components/InfoTooltip';
 
 // ── Supabase REST (public anon key) ───────────────────────────────────────────
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
@@ -52,8 +53,8 @@ const retCls = (v: number | null | undefined) =>
   v > -10   ? 'text-red-400' : 'text-red-500 font-bold';
 
 // ── Sortable header ───────────────────────────────────────────────────────────
-function Th({ col, label, right, active, dir, onSort }:
-  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void }) {
+function Th({ col, label, right, active, dir, onSort, info }:
+  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void; info?: string }) {
   return (
     <th
       onClick={() => onSort(col)}
@@ -64,6 +65,7 @@ function Th({ col, label, right, active, dir, onSort }:
       <span className="inline-flex items-center gap-0.5">
         {label}
         {active ? (dir === 'desc' ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />) : null}
+        {info && <InfoTooltip content={info} title={label} />}
       </span>
     </th>
   );
@@ -290,16 +292,30 @@ export default function PEADPage() {
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap">
                       Ticker / Company
                     </th>
-                    <Th col="pead_score"          label="PEAD Score"        active={sortKey==='pead_score'}          dir={sortDir} onSort={onSort} />
-                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Fundamentals</th>
-                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Trend (200 EMA)</th>
-                    <Th col="volume_multiplier"   label="Vol Spike"         active={sortKey==='volume_multiplier'}   dir={sortDir} onSort={onSort} />
-                    <th className="px-2.5 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Day Gap</th>
-                    <Th col="signal_date"         label="Result Date"       active={sortKey==='signal_date'}         dir={sortDir} onSort={onSort} />
-                    <Th col="ttm_pe"              label="TTM PE"    right   active={sortKey==='ttm_pe'}              dir={sortDir} onSort={onSort} />
-                    <Th col="returns_since_result" label="Returns %" right  active={sortKey==='returns_since_result'} dir={sortDir} onSort={onSort} />
-                    <Th col="daily_return"        label="Daily Ret %" right  active={sortKey==='daily_return'}        dir={sortDir} onSort={onSort} />
-                    <th className="px-2.5 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Tier</th>
+                    <Th col="pead_score" label="PEAD Score" active={sortKey==='pead_score'} dir={sortDir} onSort={onSort}
+                      info="Post-Earnings Announcement Drift score (0–100). Measures how strong and clean the earnings surprise was. High score = large positive surprise with low prior expectations, high institutional ownership, and strong revenue quality. Stocks with PEAD ≥ 70 historically continue drifting upward for 20–60 days after results." />
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Fundamentals <InfoTooltip title="Fundamentals" content="Quick snapshot of financial health: Revenue growth (QoQ and YoY), Net Profit margin, and EPS trend. Green = improving, Red = deteriorating. Used to confirm the earnings surprise is backed by real business improvement, not one-time items." />
+                    </th>
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Trend (200 EMA) <InfoTooltip title="Trend (200 EMA)" content="Whether the stock price is above or below its 200-day Exponential Moving Average. Above = long-term uptrend (bull phase). Below = long-term downtrend (bear phase). PEAD signals in bull phase stocks have much higher follow-through rates." />
+                    </th>
+                    <Th col="volume_multiplier" label="Vol Spike" active={sortKey==='volume_multiplier'} dir={sortDir} onSort={onSort}
+                      info="Today's volume divided by the 20-day average volume. A multiplier of 2.5x means today saw 2.5× the normal trading activity. High volume on earnings day confirms genuine institutional interest — not a retail-driven blip. Look for ≥1.5x for meaningful signals." />
+                    <th className="px-2.5 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Day Gap <InfoTooltip title="Day Gap" content="The percentage gap-up (or gap-down) in price on the day results were announced. A +5% gap means the stock opened 5% higher than the previous close. Strong gaps (≥3%) on high volume are the classic PEAD trigger — the market is immediately re-pricing the stock upward." />
+                    </th>
+                    <Th col="signal_date" label="Result Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}
+                      info="The date the quarterly earnings result was announced. PEAD drift is strongest in the first 45 days after results. Signals older than 45 days are shown dimmed — the primary drift window may have closed." />
+                    <Th col="ttm_pe" label="TTM PE" right active={sortKey==='ttm_pe'} dir={sortDir} onSort={onSort}
+                      info="Trailing Twelve Month Price-to-Earnings ratio. Share price divided by last 12 months of earnings per share. Lower PE = cheaper valuation. For PEAD, a high PE after strong results may mean the market has already priced in the growth — less room to run. Compare with sector median PE." />
+                    <Th col="returns_since_result" label="Returns %" right active={sortKey==='returns_since_result'} dir={sortDir} onSort={onSort}
+                      info="Total return of the stock from the result date to today. Measures how much the PEAD signal has already delivered. If this is already +15%, the easy money may be made. If it's still near 0%, the drift hasn't kicked in yet — potentially still a good entry." />
+                    <Th col="daily_return" label="Daily Ret %" right active={sortKey==='daily_return'} dir={sortDir} onSort={onSort}
+                      info="Today's price change as a percentage. Useful for spotting momentum continuation (stock up strongly today = active buying) vs exhaustion (stock flat or down after a big run-up)." />
+                    <th className="px-2.5 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Tier <InfoTooltip title="Tier" content="Quality tier based on combined PEAD score + fundamental strength. CONFIRMED = PEAD ≥ 80 with improving fundamentals and strong volume. EMERGING = PEAD 70–80 or mixed signals. Higher tier = higher historical win rate for drift continuation." />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

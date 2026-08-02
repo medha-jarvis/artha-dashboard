@@ -6,6 +6,7 @@ import {
   ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown,
   ChevronRight, Activity, BarChart2, TrendingUp, Zap, Target, ExternalLink,
 } from 'lucide-react';
+import { InfoTooltip } from '../components/InfoTooltip';
 
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
@@ -82,14 +83,15 @@ function ScoreGauge({ score }: { score: number }) {
   );
 }
 
-function Th({ col, label, right, active, dir, onSort }:
-  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void }) {
+function Th({ col, label, right, active, dir, onSort, info }:
+  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void; info?: string }) {
   return (
     <th onClick={() => onSort(col)}
       className={`px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap
         ${right ? 'text-right' : 'text-left'} ${active ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}>
       <span className="inline-flex items-center gap-0.5">
         {label}{active && (dir === 'desc' ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />)}
+        {info && <InfoTooltip content={info} title={label} />}
       </span>
     </th>
   );
@@ -300,14 +302,26 @@ export default function SectorPulsePage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-900/90 border-b border-slate-800">
                 <tr>
-                  <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 w-48">Sector</th>
-                  <Th col="score"             label="Score"       right active={sortKey === 'score'}             dir={sortDir} onSort={onSort} />
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stage</th>
-                  <Th col="rs_score"          label="RS vs N50"   right active={sortKey === 'rs_score'}          dir={sortDir} onSort={onSort} />
-                  <Th col="breadth_pct"       label="Breadth"     right active={sortKey === 'breadth_pct'}       dir={sortDir} onSort={onSort} />
-                  <Th col="distance_52w_high" label="52W High"    right active={sortKey === 'distance_52w_high'} dir={sortDir} onSort={onSort} />
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">ATR Status</th>
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Above 50 SMA</th>
+                  <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 w-48">
+                    Sector <InfoTooltip title="Sector" content="StockScans custom sector index — equal-weighted basket of constituent stocks. Click any row to open the sector's live chart on StockScans. Each sector is scored daily after market close." position="bottom" />
+                  </th>
+                  <Th col="score" label="Score" right active={sortKey === 'score'} dir={sortDir} onSort={onSort}
+                    info="100-point Techno-Funda composite: Trend Alignment (30pt) + Relative Strength vs Nifty 50 (30pt) + Volatility Contraction/VCP (25pt) + Sector Breadth (15pt). ≥80 = Stage 2A breakout zone. 65–79 = Stage 2B sustained trend. 50–64 = consolidation. Below 50 = avoid." />
+                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    Stage <InfoTooltip title="Stage Classification" content="Stage 2A Early Inflection (≥80): Trend + RS + VCP all firing — this is the ideal entry zone for investors. Stage 2B Sustained Trend (65–79): Strong trend and RS but no VCP yet — sector is healthy, accumulate quality names on dips. Stage 1 Consolidation (50–64): Resting after a move, not yet breaking out — watchlist. Avoid/Weak (<50): Bear phase, capital at risk." position="bottom" />
+                  </th>
+                  <Th col="rs_score" label="RS vs N50" right active={sortKey === 'rs_score'} dir={sortDir} onSort={onSort}
+                    info="Mansfield Relative Strength vs Nifty 50. Measures how much this sector has outperformed (or underperformed) the Nifty 50 over the past 52 weeks. +15% means the sector returned 15% more than Nifty. Positive RS = institutional rotation into this sector. The higher the RS, the stronger the trend. This is worth 30 points in the score." />
+                  <Th col="breadth_pct" label="Breadth" right active={sortKey === 'breadth_pct'} dir={sortDir} onSort={onSort}
+                    info="Percentage of individual stocks within the sector that are trading above their own 50-day SMA. 70%+ = broad participation (all stocks rising, not just 1-2 heavyweights). Below 50% = narrow rally, unreliable. High breadth confirms the sector move is real and sustainable. Worth 15 points." />
+                  <Th col="distance_52w_high" label="52W High" right active={sortKey === 'distance_52w_high'} dir={sortDir} onSort={onSort}
+                    info="How far the sector index is from its 52-week high (as %). -3% means it's 3% below the year's peak. Near 0% or positive = sector is at or making new highs — very bullish. -20% or worse = still recovering from a significant drawdown. Within -12% scores 5 points in Trend Alignment." />
+                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    ATR Status <InfoTooltip title="ATR (Volatility Contraction)" content="Average True Range ratio: 5-day ATR divided by 20-day ATR. ATR measures daily price swings. When the ratio drops below 0.75 (Tight VCP), it means recent price swings are much tighter than usual — like a coiling spring. This Volatility Contraction Pattern (VCP) often precedes a breakout. Tight VCP + high score = most actionable setup. Worth 25 points in the score." />
+                  </th>
+                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    Above 50 SMA <InfoTooltip title="Stocks Above 50-day SMA" content="The specific stocks within the sector that are currently trading above their own 50-day Simple Moving Average. These are the leaders within the sector — the stocks driving the breadth score. When looking to invest in a sector, start with names on this list combined with strong fundamentals." />
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">

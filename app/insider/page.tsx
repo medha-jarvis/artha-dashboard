@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Eye, RefreshCw, AlertCircle, TrendingUp, TrendingDown, ChevronUp, ChevronDown } from 'lucide-react';
+import { InfoTooltip } from '../components/InfoTooltip';
 
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
@@ -12,8 +13,8 @@ type SortKey = 'insider_score'|'signal_date'|'trade_value_in_cr';
 type SortDir = 'asc'|'desc';
 type Filter  = 'all'|'buy'|'sell'|'cluster'|'high';
 
-function Th({ col, label, right, active, dir, onSort }: { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void }) {
-  return <th onClick={() => onSort(col)} className={`px-3 py-3 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap ${right?'text-right':'text-left'} ${active?'text-white':'text-slate-500 hover:text-slate-300'}`}><span className="inline-flex items-center gap-0.5">{label}{active&&(dir==='desc'?<ChevronDown className="w-3 h-3"/>:<ChevronUp className="w-3 h-3"/>)}</span></th>;
+function Th({ col, label, right, active, dir, onSort, info }: { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void; info?: string }) {
+  return <th onClick={() => onSort(col)} className={`px-3 py-3 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap ${right?'text-right':'text-left'} ${active?'text-white':'text-slate-500 hover:text-slate-300'}`}><span className="inline-flex items-center gap-0.5">{label}{active&&(dir==='desc'?<ChevronDown className="w-3 h-3"/>:<ChevronUp className="w-3 h-3"/>)}{info&&<InfoTooltip content={info} title={label}/>}</span></th>;
 }
 
 export default function InsiderPage() {
@@ -99,15 +100,30 @@ export default function InsiderPage() {
                 <thead className="sticky top-0 z-20">
                   <tr className="bg-[#161b22] border-b-2 border-slate-700">
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap">Ticker / Company</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Type</th>
-                    <Th col="signal_date" label="Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}/>
-                    <Th col="insider_score" label="Score" active={sortKey==='insider_score'} dir={sortDir} onSort={onSort} right/>
-                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Tier ↗</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Acquirer</th>
-                    <Th col="trade_value_in_cr" label="Value" active={sortKey==='trade_value_in_cr'} dir={sortDir} onSort={onSort} right/>
-                    <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">% Equity</th>
-                    <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">EMA150 Dist</th>
-                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Cluster</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Type <InfoTooltip title="Transaction Type" content="BUY = promoter or key management bought shares from the open market using their own money. SELL = they sold. Insider BUYs are much more meaningful — no one buys their own company stock unless they believe in it. Insider SELLs can be routine (tax, diversification) so need more scrutiny." />
+                    </th>
+                    <Th col="signal_date" label="Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}
+                      info="Date the insider transaction was filed with SEBI under the PIT (Prohibition of Insider Trading) regulations. Fresh signals (≤30 days) carry more weight. Clustered filings within a short window are especially bullish." />
+                    <Th col="insider_score" label="Score" active={sortKey==='insider_score'} dir={sortDir} onSort={onSort} right
+                      info="Composite Insider Conviction Score (0–100). Factors: transaction size (larger = more conviction), role of insider (Promoter/MD vs junior employee), clustering (multiple insiders buying together), price paid relative to 52W range (buying near highs = more bullish than buying dips), and historical accuracy of this insider's past trades." />
+                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Tier <InfoTooltip title="Tier" content="CONFIRMED = Promoter/MD buying ≥₹1Cr, score ≥75, near 52W highs. HIGH = Large transaction by key management. MEDIUM = Significant but smaller or non-promoter insider. Higher tier = stronger signal historically. Promoter buy near 52W high is the most bullish possible signal." />
+                    </th>
+                    <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Acquirer <InfoTooltip title="Acquirer / Insider Name" content="The person who bought or sold. Promoter/Founder buying is the strongest signal — they have the most information about the company's future. Independent Director or CFO buying is also strong. Employee ESOPs being sold are the weakest/most routine." />
+                    </th>
+                    <Th col="trade_value_in_cr" label="Value" active={sortKey==='trade_value_in_cr'} dir={sortDir} onSort={onSort} right
+                      info="Total rupee value of the insider transaction in Crores. Size matters — a promoter buying ₹50Cr of their own stock is far more meaningful than a ₹10L purchase. Large transactions indicate genuine conviction, not routine portfolio activity." />
+                    <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      % Equity <InfoTooltip title="% of Equity" content="The transaction value as a percentage of the company's total market cap. A ₹50Cr buy in a ₹500Cr company (10%) is far more meaningful than in a ₹50,000Cr company (0.1%). Higher percentage = stronger signal relative to company size." />
+                    </th>
+                    <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      EMA150 Dist <InfoTooltip title="Distance from 150-day EMA" content="How far the current price is above/below its 150-day moving average. Positive % = stock is in uptrend territory. An insider buying when the stock is already above its 150 EMA (uptrend) is more bullish than buying a falling knife. Negative = insider buying a stock still in downtrend." />
+                    </th>
+                    <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      Cluster <InfoTooltip title="Insider Cluster" content="Whether multiple insiders (2+) have transacted within a short window. Cluster buys (3+ insiders buying within 30 days) are the most powerful insider signal — it suggests a coordinated view among management that the stock is undervalued. Single insider trades are good; cluster trades are exceptional." />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

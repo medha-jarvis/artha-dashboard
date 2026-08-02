@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown, Layers, ExternalLink } from 'lucide-react';
+import { InfoTooltip } from '../components/InfoTooltip';
 
 // ── Supabase REST ─────────────────────────────────────────────────────────────
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
@@ -112,8 +113,8 @@ function SOICCell({ eps, roce }: { eps: number | null; roce: number | null }) {
 }
 
 // ── Sortable header ────────────────────────────────────────────────────────────
-function Th({ col, label, right, active, dir, onSort }:
-  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void }) {
+function Th({ col, label, right, active, dir, onSort, info }:
+  { col: SortKey; label: string; right?: boolean; active: boolean; dir: SortDir; onSort: (c: SortKey) => void; info?: string }) {
   return (
     <th onClick={() => onSort(col)}
       className={`px-2.5 py-3 text-[10px] font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap
@@ -122,6 +123,7 @@ function Th({ col, label, right, active, dir, onSort }:
       <span className="inline-flex items-center gap-0.5">
         {label}
         {active && (dir === 'desc' ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />)}
+        {info && <InfoTooltip content={info} title={label} />}
       </span>
     </th>
   );
@@ -350,15 +352,26 @@ export default function Stage2Page() {
                     <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 bg-[#161b22] sticky left-0 z-30 whitespace-nowrap min-w-[160px]">
                       Ticker / Company
                     </th>
-                    <Th col="stage2_score"        label="S2 Score"      active={sortKey==='stage2_score'}        dir={sortDir} onSort={onSort} />
-                    <Th col="days_in_stage2"       label="Freshness"     active={sortKey==='days_in_stage2'}       dir={sortDir} onSort={onSort} />
-                    <Th col="ema150_distance_pct"  label="Base Proximity" right active={sortKey==='ema150_distance_pct'}  dir={sortDir} onSort={onSort} />
-                    <Th col="volume_multiplier"    label="Vol Spike"     active={sortKey==='volume_multiplier'}    dir={sortDir} onSort={onSort} />
-                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">RS vs N500</th>
-                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">SOIC Fundamentals</th>
-                    <Th col="signal_date"          label="Date"          active={sortKey==='signal_date'}          dir={sortDir} onSort={onSort} />
-                    <Th col="returns_since_breakout" label="Return %" right active={sortKey==='returns_since_breakout'} dir={sortDir} onSort={onSort} />
-                    <Th col="daily_return"         label="Daily %" right   active={sortKey==='daily_return'}         dir={sortDir} onSort={onSort} />
+                    <Th col="stage2_score" label="S2 Score" active={sortKey==='stage2_score'} dir={sortDir} onSort={onSort}
+                      info="Stage 2 Breakout Score (0–100) based on Stan Weinstein's Stage Analysis. Measures: price above all key moving averages (SMA50/150/200), moving average upward slope, volume confirmation on breakout, relative strength vs Nifty 500. Score ≥ 75 = CONFIRMED breakout. 60–75 = EMERGING. A Stage 2 stock is in the sweet spot — past accumulation, in active uptrend, not yet exhaustion." />
+                    <Th col="days_in_stage2" label="Freshness" active={sortKey==='days_in_stage2'} dir={sortDir} onSort={onSort}
+                      info="Number of days since the stock entered Stage 2 (broke out above its base). 0–15 days = Golden Window — historically highest return-to-risk ratio. 15–45 days = Established trend, still good. 45+ days = Extended, risk-reward less favourable. The earlier you enter a Stage 2, the better." />
+                    <Th col="ema150_distance_pct" label="Base Proximity" right active={sortKey==='ema150_distance_pct'} dir={sortDir} onSort={onSort}
+                      info="How far the current price is above the 150-day EMA (in %). This is the 'how extended is it?' indicator. 5–15% above = ideal buy zone. 20%+ above = stock is stretched, higher risk of mean reversion. 0–5% = near the base, safest entry if trend is intact." />
+                    <Th col="volume_multiplier" label="Vol Spike" active={sortKey==='volume_multiplier'} dir={sortDir} onSort={onSort}
+                      info="Breakout day volume divided by 50-day average volume. Minervini's rule: a true breakout needs at least 40–50% above-average volume (1.4x–1.5x). 2x+ = institutional conviction. Low volume breakouts (under 1x) fail more often — no one is actually buying." />
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      RS vs N500 <InfoTooltip title="Relative Strength vs Nifty 500" content="Whether this stock's price trend is stronger (Rising), weaker (Falling), or neutral (Flat) compared to the Nifty 500 index. Rising RS = institutional money is actively rotating into this stock vs the broad market. This is the single most important filter — only stocks with Rising RS have sustainable Stage 2 moves." />
+                    </th>
+                    <th className="px-2.5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">
+                      SOIC Fundamentals <InfoTooltip title="SOIC Fundamental Quality" content="Fundamental quality rating inspired by SOIC (School of Intrinsic Compounding) framework. Checks: Revenue growth consistency, operating leverage (margins expanding with revenue), ROCE trend, and debt levels. HIGH = all fundamentals strong. MEDIUM = mixed. Breakout stocks with strong fundamentals have far higher success rates." />
+                    </th>
+                    <Th col="signal_date" label="Date" active={sortKey==='signal_date'} dir={sortDir} onSort={onSort}
+                      info="Date the Stage 2 breakout was first detected. Freshness matters enormously — a breakout from yesterday has more upside than one from 3 months ago. Filter by 'Fresh (≤15d)' for the best risk-reward." />
+                    <Th col="returns_since_breakout" label="Return %" right active={sortKey==='returns_since_breakout'} dir={sortDir} onSort={onSort}
+                      info="Total return since the breakout date. Shows how much the signal has already delivered. If already +30%, the first leg may be complete and a pullback to the base is likely. If still near 0%, the move hasn't started or is just beginning." />
+                    <Th col="daily_return" label="Daily %" right active={sortKey==='daily_return'} dir={sortDir} onSort={onSort}
+                      info="Today's price change. Useful to spot momentum days (strong up = continuation buying) vs distribution (up on weak volume or reversing from intraday highs = warning sign)." />
                     <th className="px-2.5 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
