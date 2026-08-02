@@ -10,10 +10,16 @@ import {
 
 interface SectorPulseCard { name: string; score: number; stage: string; }
 const STAGE_DOT: Record<string, string> = {
-  STAGE2_BREAKOUT: 'bg-emerald-400',
-  STAGE2_EARLY:    'bg-sky-400',
-  STAGE2_WATCH:    'bg-amber-400',
-  BELOW_STAGE2:    'bg-slate-600',
+  'Stage 2A Early Inflection': 'bg-emerald-400',
+  'Stage 2B Sustained Trend':  'bg-sky-400',
+  'Stage 1 Consolidation':     'bg-amber-400',
+  'Avoid / Weak':              'bg-slate-600',
+};
+const STAGE_BAR: Record<string, string> = {
+  'Stage 2A Early Inflection': 'bg-emerald-500',
+  'Stage 2B Sustained Trend':  'bg-sky-500',
+  'Stage 1 Consolidation':     'bg-amber-500',
+  'Avoid / Weak':              'bg-slate-700',
 };
 
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
@@ -398,7 +404,7 @@ export default function ConfluenceHub() {
               {sectorPulse.map(s => {
                 const dot = STAGE_DOT[s.stage] || 'bg-slate-600';
                 const pct = Math.min(s.score, 100);
-                const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 65 ? 'bg-sky-500' : pct >= 50 ? 'bg-amber-500' : 'bg-slate-600';
+                const barColor = STAGE_BAR[s.stage] || 'bg-slate-700';
                 return (
                   <Link key={s.name} href="/sector-pulse"
                     className="group bg-slate-900/60 hover:bg-slate-800/60 border border-slate-800 hover:border-slate-700 rounded-lg p-2.5 transition-all">
