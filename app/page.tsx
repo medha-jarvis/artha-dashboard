@@ -18,8 +18,10 @@ const sb = (path: string) =>
 
 const CUTOFF_DAYS         = 45;
 const INSIDER_CUTOFF_DAYS = 180;
+const SI_CUTOFF_DAYS      = 30;
 const cutoffDate        = () => { const d = new Date(); d.setDate(d.getDate() - CUTOFF_DAYS);         return d.toISOString().slice(0,10); };
 const insiderCutoffDate = () => { const d = new Date(); d.setDate(d.getDate() - INSIDER_CUTOFF_DAYS); return d.toISOString().slice(0,10); };
+const siCutoffDate      = () => { const d = new Date(); d.setDate(d.getDate() - SI_CUTOFF_DAYS);      return d.toISOString().slice(0,10); };
 
 interface PeadRow          { id: string; ticker: string; pead_score: number; trigger_path: string; signal_date: string; }
 interface Stage2Row        { id: string; ticker: string; stage2_score: number; tier: string; days_in_stage2: number|null; signal_date: string; }
@@ -105,7 +107,7 @@ export default function ConfluenceHub() {
         sb(`pead_signals?select=id,ticker,pead_score,trigger_path,signal_date&signal_date=gte.${cutoff}&pead_score=gte.70&order=pead_score.desc`),
         sb(`stage2_signals?select=id,ticker,stage2_score,tier,days_in_stage2,signal_date&signal_date=gte.${cutoff}&stage2_score=gte.75&order=stage2_score.desc`),
         sb(`insider_signals?select=ticker,company_name,insider_score,transaction_type,acquirer_name,trade_value_in_cr,tier,signal_date&signal_date=gte.${insCutoff}&insider_score=gte.75&order=insider_score.desc`),
-        sb(`super_investor_signals?select=ticker,client_name,transaction_type,trade_value_cr,signal_date&signal_date=gte.${cutoff}&order=trade_value_cr.desc`),
+        sb(`super_investor_signals?select=ticker,client_name,transaction_type,trade_value_cr,signal_date&signal_date=gte.${siCutoffDate()}&order=trade_value_cr.desc`),
       ]) as [PeadRow[], Stage2Row[], InsiderRow[], SuperInvestorRow[]];
 
       if (!Array.isArray(peadRaw)) throw new Error(`PEAD: ${JSON.stringify(peadRaw)}`);
@@ -561,10 +563,10 @@ export default function ConfluenceHub() {
                 accent:'text-violet-400', badge:'Live', badgeStyle:'bg-violet-500/15 text-violet-400', count:insTotal,
               },
               {
-                href:'#', icon:Crown, title:'Super Investor', live:false,
+                href:'/super-investor', icon:Crown, title:'Super Investor', live:true,
                 desc:'NSE Bulk/Block deals · Parikh family · Kacholia · Rare · Institutional flow',
-                gradient:'from-yellow-600/10 to-transparent', border:'border-yellow-700/30',
-                accent:'text-yellow-500', badge:'Beta', badgeStyle:'bg-yellow-500/15 text-yellow-400', count:siTotal,
+                gradient:'from-yellow-600/12 to-transparent', border:'border-yellow-500/20 hover:border-yellow-400/40',
+                accent:'text-yellow-400', badge:'Live', badgeStyle:'bg-yellow-500/15 text-yellow-400', count:siTotal,
               },
               {
                 href:'#', icon:Target, title:'Goals', live:false,

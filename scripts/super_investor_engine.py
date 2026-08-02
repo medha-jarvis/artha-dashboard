@@ -1,7 +1,9 @@
 """
 Super Investor Flow Pipeline — NSE Bulk & Block Deals.
-Filters HFT noise, keeps curated super investors, upserts to Supabase.
-Runs Mon-Fri 7:00 PM IST from VPS cron (requires Indian IP for NSE).
+Real NSE field names (verified from live API):
+  symbol, clientName, buySell, qty, watp
+  Table keys: BULK_DEALS_DATA, BLOCK_DEALS_DATA
+Runs Mon-Fri 7:00 PM IST from VPS cron (Indian IP required for NSE).
 """
 
 import os, time, requests
@@ -64,14 +66,16 @@ def get_nse_session() -> requests.Session:
 
 
 def fetch_deals(session: requests.Session) -> tuple[list[dict], list[dict]]:
+    """Fetch today's bulk and block deals. Verified field names from live NSE API."""
     try:
         r = session.get(
             "https://www.nseindia.com/api/snapshot-capital-market-largedeal",
             timeout=20
         )
         data = r.json()
-        bulk  = data.get("BULK_DEALS_TABLE",  []) or []
-        block = data.get("BLOCK_DEALS_TABLE", []) or []
+        # Verified keys from live API: BULK_DEALS_DATA and BLOCK_DEALS_DATA
+        bulk  = data.get("BULK_DEALS_DATA",  []) or []
+        block = data.get("BLOCK_DEALS_DATA", []) or []
         print(f"[nse] bulk={len(bulk)}, block={len(block)}")
         return bulk, block
     except Exception as e:
@@ -79,26 +83,25 @@ def fetch_deals(session: requests.Session) -> tuple[list[dict], list[dict]]:
         return [], []
 
 
-def parse_deal(rec: dict, deal_type: str) -> dict | None:
+def parse_deal(rec: dict, deal_type: str, signal_date: str = TODAY) -> dict | None:
+    """
+    Parse one NSE bulk/block deal record.
+    Verified field names from live API:
+      symbol, clientName, buySell ('BUY'/'SELL'), qty (str), watp (str price)
+    """
     try:
-        ticker = (
-            rec.get("BD_SYMBOL") or rec.get("symbol") or rec.get("name") or ""
-        ).strip().upper()
-        client = (
-            rec.get("BD_CLIENT_NAME") or rec.get("clientName") or rec.get("clientname") or ""
-        ).strip().upper()
-        bs_raw = (
-            rec.get("BD_BUY_SELL") or rec.get("buySell") or ""
-        ).strip().upper()
-        qty_raw   = rec.get("BD_QTY_TRD")   or rec.get("quantity")   or rec.get("noOfSharesBoughtSold") or 0
-        price_raw = rec.get("BD_TP_WATP")   or rec.get("wapRate")    or rec.get("price") or 0
+        ticker = rec.get("symbol", "").strip().upper()
+        client = rec.get("clientName", "").strip().upper()
+        bs_raw = rec.get("buySell", "").strip().upper()
+        qty_raw   = rec.get("qty",  "0")
+        price_raw = rec.get("watp", "0")
 
         if not ticker or not client:
             return None
 
-        if bs_raw in ("B", "BUY", "PURCHASE"):
+        if bs_raw == "BUY":
             txn = "BUY"
-        elif bs_raw in ("S", "SELL", "SALE"):
+        elif bs_raw == "SELL":
             txn = "SELL"
         else:
             return None
@@ -108,24 +111,32 @@ def parse_deal(rec: dict, deal_type: str) -> dict | None:
         if qty <= 0 or price <= 0:
             return None
 
-        return {"ticker": ticker, "client": client, "txn": txn,
-                "qty": qty, "price": price, "deal_type": deal_type}
+        return {
+            "ticker": ticker, "client": client, "txn": txn,
+            "qty": qty, "price": price, "deal_type": deal_type,
+            "signal_date": signal_date,
+        }
     except Exception as e:
         print(f"[parse] {e}")
         return None
 
 
 def net_trades(records: list[dict]) -> list[dict]:
-    """Net buy vs sell for same (ticker, client) pair; blended avg price."""
+    """
+    Net buy vs sell for same (ticker, client, date) group.
+    Blended avg price = weighted average of the dominant side's trades.
+    trade_value_cr = (net_qty × avg_price) / 1Cr  [per spec].
+    """
     groups: dict = defaultdict(lambda: {
         "buy_qty": 0, "buy_val": 0.0,
         "sell_qty": 0, "sell_val": 0.0,
-        "deal_type": "BULK",
+        "deal_type": "BULK", "signal_date": TODAY,
     })
     for r in records:
-        key = (r["ticker"], r["client"])
+        key = (r["ticker"], r["client"], r["signal_date"])
         g = groups[key]
-        g["deal_type"] = r["deal_type"]
+        g["deal_type"]   = r["deal_type"]
+        g["signal_date"] = r["signal_date"]
         if r["txn"] == "BUY":
             g["buy_qty"] += r["qty"]
             g["buy_val"] += r["qty"] * r["price"]
@@ -134,17 +145,18 @@ def net_trades(records: list[dict]) -> list[dict]:
             g["sell_val"] += r["qty"] * r["price"]
 
     result = []
-    for (ticker, client), g in groups.items():
+    for (ticker, client, sig_date), g in groups.items():
         net_qty = g["buy_qty"] - g["sell_qty"]
         if net_qty > 0:
-            txn, total_qty, total_val = "BUY",  g["buy_qty"],  g["buy_val"]
+            txn      = "BUY"
+            avg_price = g["buy_val"]  / g["buy_qty"]  if g["buy_qty"]  else 0.0
         elif net_qty < 0:
-            txn, total_qty, total_val = "SELL", g["sell_qty"], g["sell_val"]
-            net_qty = abs(net_qty)
+            txn      = "SELL"
+            net_qty  = abs(net_qty)
+            avg_price = g["sell_val"] / g["sell_qty"] if g["sell_qty"] else 0.0
         else:
-            continue
+            continue  # net zero — skip
 
-        avg_price      = total_val / total_qty if total_qty else 0.0
         trade_value_cr = (net_qty * avg_price) / 10_000_000
         result.append({
             "ticker": ticker, "client": client,
@@ -152,6 +164,7 @@ def net_trades(records: list[dict]) -> list[dict]:
             "avg_price": round(avg_price, 2),
             "trade_value_cr": round(trade_value_cr, 4),
             "deal_type": g["deal_type"],
+            "signal_date": sig_date,
         })
     return result
 
@@ -177,44 +190,24 @@ def send_telegram(msg: str):
         print(f"[tg] {e}")
 
 
-def run():
-    print(f"[super_investor] starting — {TODAY}")
-    session = get_nse_session()
-    bulk, block = fetch_deals(session)
-
-    raw = []
-    for rec in bulk:
-        p = parse_deal(rec, "BULK")
-        if p:
-            raw.append(p)
-    for rec in block:
-        p = parse_deal(rec, "BLOCK")
-        if p:
-            raw.append(p)
-    print(f"[filter] parsed {len(raw)} raw deals")
-
-    raw = [r for r in raw if not is_hft(r["client"])]
-    print(f"[filter] after HFT drop: {len(raw)}")
-
+def process_and_upsert(raw_records: list[dict]) -> int:
+    """Filter → net → min value → upsert. Returns count inserted."""
+    raw = [r for r in raw_records if not is_hft(r["client"])]
     raw = [r for r in raw if is_super_investor(r["client"])]
-    print(f"[filter] after whitelist: {len(raw)}")
+    if not raw:
+        return 0
 
     netted = net_trades(raw)
-    print(f"[net] after netting: {len(netted)} rows")
-
     netted = [r for r in netted if r["trade_value_cr"] >= MIN_TRADE_VALUE_CR]
-    print(f"[filter] after min ₹{MIN_TRADE_VALUE_CR}Cr: {len(netted)}")
-
     if not netted:
-        print("[super_investor] no qualifying trades today")
-        return
+        return 0
 
     rows = [{
         "ticker":           r["ticker"],
         "client_name":      r["client"],
         "deal_type":        r["deal_type"],
         "transaction_type": r["txn"],
-        "signal_date":      TODAY,
+        "signal_date":      r["signal_date"],
         "net_quantity":     r["net_qty"],
         "avg_price":        r["avg_price"],
         "trade_value_cr":   r["trade_value_cr"],
@@ -223,13 +216,45 @@ def run():
     sb.table("super_investor_signals").upsert(
         rows, on_conflict="ticker,client_name,signal_date"
     ).execute()
-    print(f"[db] upserted {len(rows)} rows")
+    return len(rows)
+
+
+def run():
+    print(f"[super_investor] starting — {TODAY}")
+    session = get_nse_session()
+    bulk, block = fetch_deals(session)
+
+    raw = []
+    for rec in bulk:
+        p = parse_deal(rec, "BULK")
+        if p: raw.append(p)
+    for rec in block:
+        p = parse_deal(rec, "BLOCK")
+        if p: raw.append(p)
+    print(f"[parse] {len(raw)} raw deals before filters")
+
+    n = process_and_upsert(raw)
+    print(f"[db] upserted {n} qualifying trades")
+
+    if n == 0:
+        print("[super_investor] no qualifying trades today")
+        return
+
+    # Re-fetch from DB to get today's qualifying trades for Telegram alert
+    result = (
+        sb.table("super_investor_signals")
+        .select("ticker,client_name,transaction_type,trade_value_cr,avg_price")
+        .eq("signal_date", TODAY)
+        .order("trade_value_cr", desc=True)
+        .execute()
+    )
+    trades = result.data or []
 
     lines = ["<b>🏦 Super Investor Flow</b>", f"<i>{TODAY}</i>", ""]
-    for r in sorted(netted, key=lambda x: -x["trade_value_cr"]):
-        em = "🟢" if r["txn"] == "BUY" else "🔴"
-        lines.append(f"{em} <b>{r['ticker']}</b> — {r['client'][:30]}")
-        lines.append(f"   {r['txn']} ₹{r['trade_value_cr']:.1f}Cr @ ₹{r['avg_price']:.1f}")
+    for r in trades:
+        em = "🟢" if r["transaction_type"] == "BUY" else "🔴"
+        lines.append(f"{em} <b>{r['ticker']}</b> — {r['client_name'][:28]}")
+        lines.append(f"   {r['transaction_type']} ₹{r['trade_value_cr']:.1f}Cr @ ₹{r['avg_price']:.1f}")
     send_telegram("\n".join(lines))
     print("[super_investor] done")
 
