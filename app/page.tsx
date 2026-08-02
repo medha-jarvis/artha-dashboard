@@ -8,6 +8,14 @@ import {
   BarChart2, Target, BookOpen, Wallet, Activity, Crown,
 } from 'lucide-react';
 
+interface SectorPulseCard { name: string; score: number; stage: string; }
+const STAGE_DOT: Record<string, string> = {
+  STAGE2_BREAKOUT: 'bg-emerald-400',
+  STAGE2_EARLY:    'bg-sky-400',
+  STAGE2_WATCH:    'bg-amber-400',
+  BELOW_STAGE2:    'bg-slate-600',
+};
+
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
 const sb = (path: string) =>
@@ -96,12 +104,27 @@ export default function ConfluenceHub() {
   const [s2Total,     setS2Total]     = useState(0);
   const [insTotal,    setInsTotal]    = useState(0);
   const [siTotal,     setSiTotal]     = useState(0);
+  const [sectorPulse, setSectorPulse] = useState<SectorPulseCard[]>([]);
 
   const loadData = async () => {
     setLoading(true); setError('');
     try {
       const cutoff       = cutoffDate();
       const insCutoff    = insiderCutoffDate();
+
+      // Sector Pulse — latest scores (non-blocking)
+      sb('daily_sector_scores?select=score,stage,sector_definitions(name)&order=date.desc,score.desc&limit=20')
+        .then((rows: Array<{score:number;stage:string;sector_definitions:{name:string}|null}>) => {
+          if (Array.isArray(rows)) {
+            const seen = new Set<string>();
+            const unique: SectorPulseCard[] = [];
+            rows.forEach(r => {
+              const n = r.sector_definitions?.name || '';
+              if (n && !seen.has(n)) { seen.add(n); unique.push({ name: n, score: r.score, stage: r.stage }); }
+            });
+            setSectorPulse(unique.slice(0, 6));
+          }
+        }).catch(() => {});
 
       const [peadRaw, s2Raw, insRaw, siRaw] = await Promise.all([
         sb(`pead_signals?select=id,ticker,pead_score,trigger_path,signal_date&signal_date=gte.${cutoff}&pead_score=gte.70&order=pead_score.desc`),
@@ -258,11 +281,14 @@ export default function ConfluenceHub() {
   const tripleCount   = data.filter(t => getBadge(t).label === 'TRIPLE PLAY').length;
   const insHcCount    = data.filter(t => t.insider_score != null).length;
 
+  const breakoutSectors = sectorPulse.filter(s => s.stage === 'STAGE2_BREAKOUT').length;
+
   const navLinks = [
-    { href:'/portfolio', label:'Portfolio',     icon:BarChart2, color:'text-emerald-400', border:'border-emerald-500/30 hover:border-emerald-400/60', bg:'hover:bg-emerald-500/8', count: null },
-    { href:'/pead',      label:'PEAD',          icon:Zap,       color:'text-amber-400',  border:'border-amber-500/30 hover:border-amber-400/60',   bg:'hover:bg-amber-500/8',   count: peadTotal||null },
-    { href:'/stage2',    label:'Stage 2',       icon:Layers,    color:'text-blue-400',   border:'border-blue-500/30 hover:border-blue-400/60',     bg:'hover:bg-blue-500/8',    count: s2Total||null },
-    { href:'/insider',   label:'Insider Intel', icon:Eye,       color:'text-violet-400', border:'border-violet-500/30 hover:border-violet-400/60', bg:'hover:bg-violet-500/8',  count: insTotal||null },
+    { href:'/portfolio',     label:'Portfolio',     icon:BarChart2, color:'text-emerald-400', border:'border-emerald-500/30 hover:border-emerald-400/60', bg:'hover:bg-emerald-500/8', count: null },
+    { href:'/pead',          label:'PEAD',          icon:Zap,       color:'text-amber-400',  border:'border-amber-500/30 hover:border-amber-400/60',   bg:'hover:bg-amber-500/8',   count: peadTotal||null },
+    { href:'/stage2',        label:'Stage 2',       icon:Layers,    color:'text-blue-400',   border:'border-blue-500/30 hover:border-blue-400/60',     bg:'hover:bg-blue-500/8',    count: s2Total||null },
+    { href:'/insider',       label:'Insider Intel', icon:Eye,       color:'text-violet-400', border:'border-violet-500/30 hover:border-violet-400/60', bg:'hover:bg-violet-500/8',  count: insTotal||null },
+    { href:'/sector-pulse',  label:'Sector Pulse',  icon:Activity,  color:'text-teal-400',   border:'border-teal-500/30 hover:border-teal-400/60',     bg:'hover:bg-teal-500/8',    count: breakoutSectors||null },
   ];
 
   return (
@@ -321,7 +347,7 @@ export default function ConfluenceHub() {
         </div>
 
         {/* ── Quick Nav ── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
           {navLinks.map(n => {
             const Icon = n.icon;
             return (
@@ -348,6 +374,48 @@ export default function ConfluenceHub() {
         {error && (
           <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/30 rounded-xl p-3 text-red-300 text-xs">
             <AlertCircle className="w-4 h-4 shrink-0"/>{error}
+          </div>
+        )}
+
+        {/* ── Sector Pulse Mini-Card ── */}
+        {sectorPulse.length > 0 && (
+          <div className="bg-white/[0.02] border border-teal-500/20 rounded-xl p-4 backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-teal-400" />
+                <span className="text-sm font-semibold text-white">Sector Pulse</span>
+                {breakoutSectors > 0 && (
+                  <span className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 rounded-full text-[10px] font-bold text-emerald-300">
+                    {breakoutSectors} BREAKOUT{breakoutSectors > 1 ? 'S' : ''}
+                  </span>
+                )}
+              </div>
+              <Link href="/sector-pulse" className="text-[11px] text-teal-500 hover:text-teal-300 transition-colors">
+                View all →
+              </Link>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+              {sectorPulse.map(s => {
+                const dot = STAGE_DOT[s.stage] || 'bg-slate-600';
+                const pct = Math.min(s.score, 100);
+                const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 65 ? 'bg-sky-500' : pct >= 50 ? 'bg-amber-500' : 'bg-slate-600';
+                return (
+                  <Link key={s.name} href="/sector-pulse"
+                    className="group bg-slate-900/60 hover:bg-slate-800/60 border border-slate-800 hover:border-slate-700 rounded-lg p-2.5 transition-all">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
+                      <span className="text-[11px] text-slate-300 font-medium truncate">{s.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[11px] font-mono font-bold text-white">{s.score}</span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         )}
 
