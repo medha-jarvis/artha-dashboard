@@ -162,7 +162,6 @@ export default function ConfluenceHub() {
         const insider = insMap.get(ticker), si = siMap.get(ticker);
 
         const count = [pead, s2, insider, si].filter(Boolean).length;
-        if (count < 2) continue; // confluence requires 2+ pipelines
 
         const dates = [pead?.signal_date, s2?.signal_date, insider?.signal_date, si?.signal_date].filter(Boolean) as string[];
         const ttm   = s2?.returns_since_breakout ?? pead?.returns_since_result ?? null;
@@ -227,7 +226,7 @@ export default function ConfluenceHub() {
     if (filter === 'ins_sell')      return withBadge.filter(t => t.insider_score != null && t.insider_type === 'SELL');
     if (filter === 'si_buy')        return withBadge.filter(t => t.si_type === 'BUY');
     if (filter === 'si_sell')       return withBadge.filter(t => t.si_type === 'SELL');
-    if (filter === 'multi')         return withBadge.filter(t => t.signals_count >= 2);
+    if (filter === 'multi')         return withBadge.filter(t => t.signals_count >= 2); // 2+ pipelines filter
     return withBadge;
   }, [data, filter]);
 
@@ -587,7 +586,7 @@ export default function ConfluenceHub() {
               },
             ]).map(card => {
               const Icon = card.icon;
-              const isClickable = card.live || card.badge === 'Beta';
+              const isClickable = card.live;
               const inner = (
                 <div className={`relative h-full bg-gradient-to-br ${card.gradient} bg-white/[0.025] border ${card.border} rounded-2xl p-4 transition-all duration-200 ${isClickable?'hover:bg-white/[0.04] hover:scale-[1.01] cursor-pointer':'opacity-50 cursor-not-allowed'} backdrop-blur-sm overflow-hidden`}>
                   <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none rounded-2xl"/>
