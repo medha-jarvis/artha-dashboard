@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown,
-  ChevronRight, Activity, BarChart2, TrendingUp, Zap, Target,
+  ChevronRight, Activity, BarChart2, TrendingUp, Zap, Target, ExternalLink,
 } from 'lucide-react';
 
 const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
@@ -28,8 +28,11 @@ interface SectorScore {
   atr_ratio: number | null;
   breadth_pct: number | null;
   top_constituents: Constituent[] | null;
-  sector_definitions: { name: string; slug: string; id?: string } | null;
+  sector_definitions: { name: string; slug: string; stockscans_id: string | null } | null;
 }
+
+const ssUrl = (pciId: string | null | undefined) =>
+  pciId ? `https://www.stockscans.in/charts/${pciId}` : 'https://www.stockscans.in/custom-index';
 
 // Stage config keyed on exact stage strings from engine.py
 const STAGE_META: Record<string, {
@@ -145,7 +148,7 @@ export default function SectorPulsePage() {
       setLastDate(latest);
 
       const scores: SectorScore[] = await sb(
-        `daily_sector_scores?select=id,date,score,stage,distance_52w_high,rs_score,atr_ratio,breadth_pct,top_constituents,sector_definitions(name,slug)&date=eq.${latest}&order=score.desc`
+        `daily_sector_scores?select=id,date,score,stage,distance_52w_high,rs_score,atr_ratio,breadth_pct,top_constituents,sector_definitions(name,slug,stockscans_id)&date=eq.${latest}&order=score.desc`
       );
       setData(Array.isArray(scores) ? scores : []);
     } catch (e: unknown) {
@@ -313,15 +316,21 @@ export default function SectorPulsePage() {
                   const atr  = row.atr_ratio;
                   const atrLabel = atr == null ? '—' : atr < 0.60 ? '🟢 Tight VCP' : atr < 0.75 ? '🟡 Compressed' : '⚪ Normal';
                   const atrColor = atr == null ? 'text-slate-600' : atr < 0.60 ? 'text-emerald-400' : atr < 0.75 ? 'text-amber-400' : 'text-slate-500';
+                  const href = ssUrl(row.sector_definitions?.stockscans_id);
 
                   return (
-                    <tr key={row.id} className={`hover:bg-slate-800/25 transition-colors ${row.score >= 80 ? 'bg-emerald-950/8' : ''}`}>
+                    <tr key={row.id}
+                      onClick={() => window.open(href, '_blank')}
+                      className={`hover:bg-slate-800/30 transition-colors cursor-pointer group ${row.score >= 80 ? 'bg-emerald-950/8' : ''}`}>
 
                       {/* Sector name */}
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-2">
                           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
-                          <span className="font-semibold text-white text-sm">{row.sector_definitions?.name ?? '—'}</span>
+                          <span className="font-semibold text-white text-sm group-hover:text-emerald-300 transition-colors">
+                            {row.sector_definitions?.name ?? '—'}
+                          </span>
+                          <ExternalLink className="w-3 h-3 text-slate-700 group-hover:text-emerald-500 transition-colors flex-shrink-0" />
                         </div>
                       </td>
 

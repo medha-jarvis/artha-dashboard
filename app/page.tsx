@@ -287,14 +287,16 @@ export default function ConfluenceHub() {
   const tripleCount   = data.filter(t => getBadge(t).label === 'TRIPLE PLAY').length;
   const insHcCount    = data.filter(t => t.insider_score != null).length;
 
-  const breakoutSectors = sectorPulse.filter(s => s.stage === 'STAGE2_BREAKOUT').length;
+  const qualifyingSectors = sectorPulse.filter(s =>
+    s.stage === 'Stage 2A Early Inflection' || s.stage === 'Stage 2B Sustained Trend'
+  ).length;
 
   const navLinks = [
-    { href:'/portfolio',     label:'Portfolio',     icon:BarChart2, color:'text-emerald-400', border:'border-emerald-500/30 hover:border-emerald-400/60', bg:'hover:bg-emerald-500/8', count: null },
-    { href:'/pead',          label:'PEAD',          icon:Zap,       color:'text-amber-400',  border:'border-amber-500/30 hover:border-amber-400/60',   bg:'hover:bg-amber-500/8',   count: peadTotal||null },
-    { href:'/stage2',        label:'Stage 2',       icon:Layers,    color:'text-blue-400',   border:'border-blue-500/30 hover:border-blue-400/60',     bg:'hover:bg-blue-500/8',    count: s2Total||null },
-    { href:'/insider',       label:'Insider Intel', icon:Eye,       color:'text-violet-400', border:'border-violet-500/30 hover:border-violet-400/60', bg:'hover:bg-violet-500/8',  count: insTotal||null },
-    { href:'/sector-pulse',  label:'Sector Pulse',  icon:Activity,  color:'text-teal-400',   border:'border-teal-500/30 hover:border-teal-400/60',     bg:'hover:bg-teal-500/8',    count: breakoutSectors||null },
+    { href:'/portfolio',     label:'Portfolio',     icon:BarChart2, color:'text-emerald-400', border:'border-emerald-500/30 hover:border-emerald-400/60', bg:'hover:bg-emerald-500/8', count: null,               sub: null },
+    { href:'/pead',          label:'PEAD',          icon:Zap,       color:'text-amber-400',  border:'border-amber-500/30 hover:border-amber-400/60',   bg:'hover:bg-amber-500/8',   count: peadTotal||null,    sub: null },
+    { href:'/stage2',        label:'Stage 2',       icon:Layers,    color:'text-blue-400',   border:'border-blue-500/30 hover:border-blue-400/60',     bg:'hover:bg-blue-500/8',    count: s2Total||null,      sub: null },
+    { href:'/insider',       label:'Insider Intel', icon:Eye,       color:'text-violet-400', border:'border-violet-500/30 hover:border-violet-400/60', bg:'hover:bg-violet-500/8',  count: insTotal||null,     sub: null },
+    { href:'/sector-pulse',  label:'Sector Pulse',  icon:Activity,  color:'text-teal-400',   border:'border-teal-500/30 hover:border-teal-400/60',     bg:'hover:bg-teal-500/8',    count: qualifyingSectors||null, sub: 'Breakout Radar' },
   ];
 
   return (
@@ -362,9 +364,10 @@ export default function ConfluenceHub() {
                 <Icon className={`w-4 h-4 ${n.color} flex-shrink-0`} />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-white/90 group-hover:text-white truncate">{n.label}</div>
-                  {n.count != null && n.count > 0 && (
-                    <div className={`text-[11px] ${n.color} font-bold`}>{n.count} signals</div>
-                  )}
+                  {n.count != null && n.count > 0
+                    ? <div className={`text-[11px] ${n.color} font-bold`}>{n.count} {n.sub ?? 'signals'}</div>
+                    : n.sub ? <div className="text-[11px] text-slate-600">{n.sub}</div> : null
+                  }
                 </div>
               </Link>
             );
@@ -390,9 +393,9 @@ export default function ConfluenceHub() {
               <div className="flex items-center gap-2">
                 <Activity className="w-4 h-4 text-teal-400" />
                 <span className="text-sm font-semibold text-white">Sector Pulse</span>
-                {breakoutSectors > 0 && (
-                  <span className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 rounded-full text-[10px] font-bold text-emerald-300">
-                    {breakoutSectors} BREAKOUT{breakoutSectors > 1 ? 'S' : ''}
+                {qualifyingSectors > 0 && (
+                  <span className="px-2 py-0.5 bg-teal-500/20 border border-teal-500/40 rounded-full text-[10px] font-bold text-teal-300">
+                    {qualifyingSectors} trending
                   </span>
                 )}
               </div>
@@ -687,6 +690,34 @@ export default function ConfluenceHub() {
             })}
           </div>
         </div>
+
+        {/* ── Sector Pulse CTA Card ── */}
+        <Link href="/sector-pulse"
+          className="group flex items-center justify-between gap-4 px-5 py-4
+            bg-white/[0.02] hover:bg-teal-500/6 border border-teal-500/20 hover:border-teal-500/40
+            rounded-xl transition-all duration-200 backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-teal-500/15 border border-teal-500/30 flex items-center justify-center flex-shrink-0">
+              <Activity className="w-4 h-4 text-teal-400" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-white group-hover:text-teal-200 transition-colors">
+                Sector Pulse
+                {qualifyingSectors > 0 && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-teal-500/20 border border-teal-500/40 rounded-full text-[10px] font-bold text-teal-300">
+                    {qualifyingSectors} trending
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-500">
+                Minervini Stage 2 · 45 sectors · 100-pt Techno-Funda Score · Breakout Radar
+              </div>
+            </div>
+          </div>
+          <div className="text-slate-600 group-hover:text-teal-400 transition-colors text-xs font-medium flex-shrink-0">
+            View →
+          </div>
+        </Link>
 
         {/* Footer */}
         <div className="flex items-center justify-between pt-2 text-[10px] text-slate-700">
