@@ -24,6 +24,11 @@ interface SectorScore {
   date: string;
   score: number;
   stage: string;
+  confirmed_stage: string | null;
+  stage_entry_date: string | null;
+  days_in_current_stage: number | null;
+  prev_stage: string | null;
+  is_fresh_entry: boolean | null;
   distance_52w_high: number | null;
   rs_score: number | null;
   atr_ratio: number | null;
@@ -65,9 +70,23 @@ const STAGE_META: Record<string, {
 const getStage = (stage: string) =>
   STAGE_META[stage] ?? STAGE_META['Avoid / Weak'];
 
-type SortKey   = 'score' | 'rs_score' | 'breadth_pct' | 'distance_52w_high';
+type SortKey   = 'score' | 'rs_score' | 'breadth_pct' | 'distance_52w_high' | 'days_in_current_stage';
 type SortDir   = 'asc' | 'desc';
 type FilterKey = 'all' | 'Stage 2A Early Inflection' | 'Stage 2B Sustained Trend' | 'Stage 1 Consolidation' | 'Avoid / Weak';
+
+function DaysInStage({ days, isFresh, prevStage }: { days: number | null; isFresh: boolean | null; prevStage: string | null }) {
+  if (days == null) return <span className="text-slate-700">—</span>;
+  const color = days <= 14 ? 'text-emerald-400' : days <= 45 ? 'text-amber-400' : 'text-slate-500';
+  const prev  = prevStage ? prevStage.replace('Stage ', 'S').replace(' Early Inflection','2A').replace(' Sustained Trend','2B').replace('1 Consolidation','1').replace('Avoid / Weak','AV') : null;
+  return (
+    <div className="text-center">
+      <div className={`font-mono text-xs font-bold ${color}`}>
+        {isFresh && days <= 14 && <span className="mr-1">🆕</span>}{days}d
+      </div>
+      {prev && <div className="text-[9px] text-slate-600 mt-0.5">was {prev}</div>}
+    </div>
+  );
+}
 
 function ScoreGauge({ score }: { score: number }) {
   const pct   = Math.min(score, 100);
@@ -150,7 +169,7 @@ export default function SectorPulsePage() {
       setLastDate(latest);
 
       const scores: SectorScore[] = await sb(
-        `daily_sector_scores?select=id,date,score,stage,distance_52w_high,rs_score,atr_ratio,breadth_pct,top_constituents,sector_definitions(name,slug,stockscans_id)&date=eq.${latest}&order=score.desc`
+        `daily_sector_scores?select=id,date,score,stage,confirmed_stage,stage_entry_date,days_in_current_stage,prev_stage,is_fresh_entry,distance_52w_high,rs_score,atr_ratio,breadth_pct,top_constituents,sector_definitions(name,slug,stockscans_id)&date=eq.${latest}&order=score.desc`
       );
       setData(Array.isArray(scores) ? scores : []);
     } catch (e: unknown) {
@@ -316,20 +335,23 @@ export default function SectorPulsePage() {
                     info="Percentage of individual stocks within the sector that are trading above their own 50-day SMA. 70%+ = broad participation (all stocks rising, not just 1-2 heavyweights). Below 50% = narrow rally, unreliable. High breadth confirms the sector move is real and sustainable. Worth 15 points." />
                   <Th col="distance_52w_high" label="52W High" right active={sortKey === 'distance_52w_high'} dir={sortDir} onSort={onSort}
                     info="How far the sector index is from its 52-week high (as %). -3% means it's 3% below the year's peak. Near 0% or positive = sector is at or making new highs — very bullish. -20% or worse = still recovering from a significant drawdown. Within -12% scores 5 points in Trend Alignment." />
+                  <Th col="days_in_current_stage" label="In Stage" active={sortKey === 'days_in_current_stage'} dir={sortDir} onSort={onSort}
+                    info="How many days this sector has been in its current confirmed stage (using 2-week confirmation rule). 🆕 0–14 days = golden entry window — trend just confirmed. 15–45 days = active trend, still good for accumulation. 45+ days = established, be more price-selective. Sort ascending to find the freshest stage entries." />
                   <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    ATR Status <InfoTooltip title="ATR (Volatility Contraction)" content="Average True Range ratio: 5-day ATR divided by 20-day ATR. ATR measures daily price swings. When the ratio drops below 0.75 (Tight VCP), it means recent price swings are much tighter than usual — like a coiling spring. This Volatility Contraction Pattern (VCP) often precedes a breakout. Tight VCP + high score = most actionable setup. Worth 25 points in the score." />
+                    ATR Status <InfoTooltip title="ATR (Volatility Contraction)" content="Average True Range ratio: 4-week ATR divided by 12-week ATR (weekly candles). ATR measures weekly price swings. When the ratio drops below 0.70 (Tight VCP), recent weeks are much quieter than usual — a coiling spring before expansion. Worth 25 points in the score." />
                   </th>
                   <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    Above 50 SMA <InfoTooltip title="Stocks Above 50-day SMA" content="The specific stocks within the sector that are currently trading above their own 50-day Simple Moving Average. These are the leaders within the sector — the stocks driving the breadth score. When looking to invest in a sector, start with names on this list combined with strong fundamentals." />
+                    Above 10W SMA <InfoTooltip title="Stocks Above 10-week SMA" content="Stocks within the sector trading above their 10-week SMA (≈ 50-day SMA on weekly charts). These are the sector leaders driving the breadth score. When investing in a sector, start with companies on this list that also have strong fundamentals." />
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
                 {filtered.map(row => {
-                  const meta = getStage(row.stage);
+                  const displayStage = row.confirmed_stage || row.stage;
+                  const meta = getStage(displayStage);
                   const atr  = row.atr_ratio;
-                  const atrLabel = atr == null ? '—' : atr < 0.60 ? '🟢 Tight VCP' : atr < 0.75 ? '🟡 Compressed' : '⚪ Normal';
-                  const atrColor = atr == null ? 'text-slate-600' : atr < 0.60 ? 'text-emerald-400' : atr < 0.75 ? 'text-amber-400' : 'text-slate-500';
+                  const atrLabel = atr == null ? '—' : atr < 0.60 ? '🟢 Tight VCP' : atr < 0.70 ? '🟡 Compressed' : '⚪ Normal';
+                  const atrColor = atr == null ? 'text-slate-600' : atr < 0.60 ? 'text-emerald-400' : atr < 0.70 ? 'text-amber-400' : 'text-slate-500';
                   const href = ssUrl(row.sector_definitions?.stockscans_id);
 
                   return (
@@ -353,7 +375,7 @@ export default function SectorPulsePage() {
                         <ScoreGauge score={row.score} />
                       </td>
 
-                      {/* Stage badge */}
+                      {/* Stage badge — shows confirmed_stage */}
                       <td className="px-3 py-3.5">
                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.bg} ${meta.border} ${meta.color}`}>
                           {meta.short}: {meta.label.split(' ').slice(2).join(' ')}
@@ -386,6 +408,15 @@ export default function SectorPulsePage() {
                           : row.distance_52w_high >= -12 ? 'text-amber-400'
                           : 'text-slate-500'}`}>
                         {row.distance_52w_high == null ? '—' : `${row.distance_52w_high.toFixed(1)}%`}
+                      </td>
+
+                      {/* Days in Stage */}
+                      <td className="px-3 py-3.5 text-center">
+                        <DaysInStage
+                          days={row.days_in_current_stage}
+                          isFresh={row.is_fresh_entry}
+                          prevStage={row.prev_stage}
+                        />
                       </td>
 
                       {/* ATR */}
