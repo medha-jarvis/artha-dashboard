@@ -71,20 +71,31 @@ def get_nse_session() -> requests.Session:
 
 def fetch_deals(session: requests.Session) -> tuple[list[dict], list[dict]]:
     """Fetch today's bulk and block deals. Verified field names from live NSE API."""
-    try:
-        r = session.get(
-            "https://www.nseindia.com/api/snapshot-capital-market-largedeal",
-            timeout=20
-        )
-        data = r.json()
-        # Verified keys from live API: BULK_DEALS_DATA and BLOCK_DEALS_DATA
-        bulk  = data.get("BULK_DEALS_DATA",  []) or []
-        block = data.get("BLOCK_DEALS_DATA", []) or []
-        print(f"[nse] bulk={len(bulk)}, block={len(block)}")
-        return bulk, block
-    except Exception as e:
-        print(f"[nse] fetch failed: {e}")
-        return [], []
+    for attempt in range(3):
+        try:
+            r = session.get(
+                "https://www.nseindia.com/api/snapshot-capital-market-largedeal",
+                timeout=20
+            )
+            if not r.text or r.text.strip() in ("", "[]", "{}"):
+                print(f"[nse] empty response (attempt {attempt+1}), retrying...")
+                time.sleep(3)
+                # Re-warm session cookies
+                session.get("https://www.nseindia.com", timeout=15)
+                time.sleep(2)
+                session.get("https://www.nseindia.com/market-data/bulk-block-deals", timeout=10)
+                time.sleep(1)
+                continue
+            data = r.json()
+            bulk  = data.get("BULK_DEALS_DATA",  []) or []
+            block = data.get("BLOCK_DEALS_DATA", []) or []
+            print(f"[nse] bulk={len(bulk)}, block={len(block)}")
+            return bulk, block
+        except Exception as e:
+            print(f"[nse] fetch failed (attempt {attempt+1}): {e}")
+            time.sleep(3)
+    print("[nse] all attempts failed, returning empty")
+    return [], []
 
 
 def parse_deal(rec: dict, deal_type: str, signal_date: str = TODAY) -> dict | None:

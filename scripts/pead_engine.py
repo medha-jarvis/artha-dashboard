@@ -62,44 +62,44 @@ def get_nse_session() -> requests.Session:
 
 def fetch_todays_reporters(session: requests.Session, target_date: str | None = None) -> list[dict]:
     """
-    Fetch companies that reported earnings today from NSE API.
-    Filters by broadCastDate matching today (or target_date).
+    Fetch companies that reported earnings today using the NSE corporate-announcements API.
+    Filters for 'Outcome of Board Meeting' announcements containing 'financial result'.
+    This API updates in real-time unlike corporates-financial-results (which lags by days).
     """
-    fy, q = current_fy_quarter()
-    # Also check previous quarter in case it's early in the quarter
-    prev_q = {"Q1": "Q4", "Q2": "Q1", "Q3": "Q2", "Q4": "Q3"}[q]
-    prev_fy = fy if q != "Q1" else f"{int(fy[:4])-1}-{str(int(fy[:4]))[-2:]}"
-
     check_date = target_date or TODAY
+    # NSE date format for query: DD-MM-YYYY
+    try:
+        dt = datetime.strptime(check_date, "%Y-%m-%d")
+        nse_date = dt.strftime("%d-%m-%Y")
+    except ValueError:
+        nse_date = check_date
 
+    url = (
+        f"https://www.nseindia.com/api/corporate-announcements"
+        f"?index=equities&from_date={nse_date}&to_date={nse_date}"
+    )
     reporters = []
-    for year, quarter in [(fy, q), (prev_fy, prev_q)]:
-        url = f"https://www.nseindia.com/api/corporates-financial-results?index=equities&period=Quarterly&year={year}&quarter={quarter}"
-        try:
-            r = session.get(url, timeout=20)
-            data = r.json()
-            results = data if isinstance(data, list) else data.get("data", [])
-            for item in results:
-                bdate_raw = (item.get("broadCastDate") or item.get("broadcastDate") or "").strip()
-                if not bdate_raw:
-                    continue
-                # Format: "30-Jul-2026 17:17:53"
-                try:
-                    bdate = datetime.strptime(bdate_raw.split()[0], "%d-%b-%Y").date().isoformat()
-                except ValueError:
-                    continue
-                if bdate == check_date:
-                    symbol = (item.get("symbol") or item.get("SYMBOL") or "").strip().upper()
-                    cname  = (item.get("companyName") or item.get("COMPANY_NAME") or symbol).strip()
-                    if symbol:
-                        reporters.append({"ticker": symbol, "company_name": cname})
-            print(f"[nse] {year}-{quarter}: {sum(1 for r in reporters if r)} reporters on {check_date}")
-            if reporters:
-                break  # found results for this quarter, no need to check previous
-        except Exception as e:
-            print(f"[nse] results API error ({year}-{quarter}): {e}")
+    try:
+        r = session.get(url, timeout=20)
+        items = r.json() if r.text else []
+        if isinstance(items, dict):
+            items = items.get("data", [])
+        for item in items:
+            desc = (item.get("desc") or "").strip()
+            text = (item.get("attchmntText") or "").lower()
+            if desc != "Outcome of Board Meeting":
+                continue
+            if "financial result" not in text:
+                continue
+            symbol = (item.get("symbol") or "").strip().upper()
+            cname  = (item.get("sm_name") or symbol).strip()
+            if symbol:
+                reporters.append({"ticker": symbol, "company_name": cname})
+        print(f"[nse] announcements API: {len(reporters)} result reporters on {check_date}")
+    except Exception as e:
+        print(f"[nse] announcements API error: {e}")
 
-    # Deduplicate
+    # Deduplicate (same company can file standalone + consolidated)
     seen, unique = set(), []
     for r in reporters:
         if r["ticker"] not in seen:
