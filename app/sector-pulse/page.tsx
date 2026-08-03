@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown,
-  ChevronRight, Activity, BarChart2, TrendingUp, Zap, Target, ExternalLink,
+  ChevronRight, Activity, BarChart2, TrendingUp, Zap, Target, ExternalLink, Play,
 } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
@@ -147,13 +147,15 @@ function ConstituentDrawer({ constituents }: { constituents: Constituent[] | nul
 }
 
 export default function SectorPulsePage() {
-  const [data,     setData]     = useState<SectorScore[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState('');
-  const [lastDate, setLastDate] = useState('');
-  const [sortKey,  setSortKey]  = useState<SortKey>('score');
-  const [sortDir,  setSortDir]  = useState<SortDir>('desc');
-  const [filter,   setFilter]   = useState<FilterKey>('all');
+  const [data,       setData]       = useState<SectorScore[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+  const [lastDate,   setLastDate]   = useState('');
+  const [sortKey,    setSortKey]    = useState<SortKey>('score');
+  const [sortDir,    setSortDir]    = useState<SortDir>('desc');
+  const [filter,     setFilter]     = useState<FilterKey>('all');
+  const [triggering, setTriggering] = useState(false);
+  const [trigMsg,    setTrigMsg]    = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true); setError('');
@@ -171,6 +173,18 @@ export default function SectorPulsePage() {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const runScan = async () => {
+    setTriggering(true); setTrigMsg(null);
+    try {
+      const d = await fetch('/api/pulse-trigger', { method: 'POST' }).then(r => r.json());
+      setTrigMsg(d.ok ? `✓ ${d.message}` : `✗ ${d.error}`);
+    } catch (e: unknown) {
+      setTrigMsg(`✗ ${e instanceof Error ? e.message : 'Request failed'}`);
+    } finally {
+      setTriggering(false);
     }
   };
 
@@ -228,11 +242,26 @@ export default function SectorPulsePage() {
               </p>
             </div>
           </div>
-          <button onClick={loadData} disabled={loading}
-            className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors disabled:opacity-40 border border-slate-700/50">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={runScan} disabled={triggering}
+              title="Run scan now (GitHub Actions)"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-40 border border-emerald-700/40 text-xs font-medium">
+              <Play className={`w-3.5 h-3.5 ${triggering ? 'animate-pulse' : ''}`} />
+              {triggering ? 'Dispatching…' : 'Run Scan'}
+            </button>
+            <button onClick={loadData} disabled={loading}
+              className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors disabled:opacity-40 border border-slate-700/50">
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
+
+        {/* Trigger status */}
+        {trigMsg && (
+          <div className={`text-xs px-3 py-2 rounded-lg border ${trigMsg.startsWith('✓') ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-400' : 'bg-red-950/30 border-red-800/40 text-red-400'}`}>
+            {trigMsg}
+          </div>
+        )}
 
         {/* Top Metrics Row */}
         {!loading && data.length > 0 && (
@@ -283,7 +312,7 @@ export default function SectorPulsePage() {
             <Activity className="w-12 h-12 mx-auto mb-4 opacity-20" />
             <p className="text-sm font-medium">No sector scores yet.</p>
             <p className="text-xs mt-2 text-slate-700">
-              Run <code className="text-slate-600 bg-slate-900 px-1.5 py-0.5 rounded">python3 engine.py</code> on the VPS to populate.
+              Click <span className="text-emerald-600 font-medium">Run Scan</span> above to score all sectors now.
             </p>
           </div>
         )}
