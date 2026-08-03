@@ -95,13 +95,6 @@ export default function AnalyticsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Portfolio row first */}
-                  <tr className="border-b border-slate-700 bg-emerald-900/10">
-                    <td className="px-4 py-3 font-bold text-emerald-400">Your Portfolio</td>
-                    <td className="px-4 py-3 text-right font-bold text-emerald-400">—</td>
-                    <td className="px-4 py-3 text-right font-bold text-emerald-400">—</td>
-                    <td className="px-4 py-3 text-right font-bold text-emerald-400">—</td>
-                  </tr>
                   {indexes.map((idx, i) => (
                     <tr key={idx.name} className={`border-b border-slate-800/50 hover:bg-slate-800/30 ${i % 2 === 0 ? '' : 'bg-slate-900/50'}`}>
                       <td className="px-4 py-3 font-medium text-white">{idx.name}</td>

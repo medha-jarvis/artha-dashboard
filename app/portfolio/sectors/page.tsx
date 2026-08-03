@@ -129,7 +129,7 @@ export default function SectorsPage() {
                       <tr key={s.sector} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${i % 2 === 0 ? '' : 'bg-slate-900/50'}`}>
                         <td className="px-4 py-3 font-medium text-white">{s.sector}</td>
                         <td className="px-4 py-3 text-right text-slate-300">{nfmt(s.value)}</td>
-                        <td className={`px-4 py-3 text-right font-medium ${gainColor(s.gainLoss)}`}>{pct(s.gainLoss / s.invested * 100 > 0 ? s.gainLoss : s.gainLoss)}</td>
+                        <td className={`px-4 py-3 text-right font-medium ${gainColor(s.gainLoss)}`}>{s.gainLoss >= 0 ? '+' : ''}{nfmt(s.gainLoss)}</td>
                         <td className={`px-4 py-3 text-right font-semibold ${gainColor(s.gainPct)}`}>{pct(s.gainPct)}</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-2">
