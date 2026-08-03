@@ -4,9 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft, Eye, RefreshCw, AlertCircle, TrendingUp, TrendingDown, ChevronUp, ChevronDown } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
-const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
-const sb = (p: string) => fetch(`${SB_URL}/rest/v1/${p}`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` }, cache: 'no-store' }).then(r => r.json());
+const sb = (p: string) => fetch(`/api/sb/${p}`, { cache: 'no-store' }).then(r => r.json());
 
 interface Signal { id: string; ticker: string; company_name: string|null; acquirer_name: string; transaction_type: 'BUY'|'SELL'; signal_date: string; insider_score: number; trade_value_in_cr: number|null; equity_pct_traded: number|null; ema150_distance_pct: number|null; cluster_trade_flag: boolean; tier: string; promoter_historical_6m_return: number|null; }
 type SortKey = 'insider_score'|'signal_date'|'trade_value_in_cr';

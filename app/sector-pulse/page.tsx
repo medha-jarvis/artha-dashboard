@@ -8,14 +8,9 @@ import {
 } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
-const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impsandnd2Z0dXFyYWJmeWl1Y2ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTQyOTUsImV4cCI6MjA4NzkzMDI5NX0.eOa9XYyZGEM3S0Xvl95gx1wgmrQnPSV8Wh9JDxPu07M';
 
 const sb = (path: string) =>
-  fetch(`${SB_URL}/rest/v1/${path}`, {
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-    cache: 'no-store',
-  }).then(r => r.json());
+  fetch(`/api/sb/${path}`, { cache: 'no-store' }).then(r => r.json());
 
 interface Constituent { symbol: string; score?: number; stage?: string; }
 
