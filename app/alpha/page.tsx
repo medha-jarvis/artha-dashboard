@@ -1,397 +1,307 @@
 'use client';
-
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, Brain, TrendingUp, TrendingDown, Minus, Send, Loader2 } from 'lucide-react';
+import { Brain, Send, Loader2, ChevronDown, ChevronRight, RefreshCw, Activity } from 'lucide-react';
 
-const sb = (path: string) =>
-  fetch(`/api/sb/${path}`, { cache: 'no-store' }).then(r => r.json());
+// ── Types ──────────────────────────────────────────────────────────────────
+interface Profile { ticker:string; composite_score:number; composite_trend:string|null; guidance_trend:string|null; order_book_health:string|null; evasiveness_3q_avg:number|null; last_quarter:string|null; quarters_tracked:number; alert_count_90d:number|null; }
+interface EvalRow { ticker:string; uc_number:number; uc_name:string; result_json:Record<string,any>; triggered:boolean; quarter:string; fiscal_year:string; }
+interface CredRow  { ticker:string; credibility_score:number; promises_kept:number; promises_total:number; quarters_tracked:number; trend:string|null; }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface EvalRow {
-  id: string;
-  transcript_id: string;
-  ticker: string;
-  quarter: string;
-  fiscal_year: string;
-  uc_number: number;
-  uc_name: string;
-  result_json: Record<string, unknown>;
-  triggered: boolean;
-  score: number;
-  signal_type?: string;
-  announce_date?: string;
-}
+const sb = (p:string) => fetch(`/api/sb/${p}`,{cache:'no-store'}).then(r=>r.json()).catch(()=>[]);
 
-interface CredibilityRow {
-  ticker: string;
-  credibility_score: number;
-  promises_kept: number;
-  promises_total: number;
-  quarters_tracked: number;
-  trend: string | null;
-}
+// ── Score helpers ──────────────────────────────────────────────────────────
+const TIER = (s:number) => s>=85?{label:'High Conviction',color:'text-emerald-300'}:s>=70?{label:'Positive',color:'text-emerald-400'}:s>=55?{label:'Stable',color:'text-slate-300'}:s>=40?{label:'Cautious',color:'text-amber-400'}:{label:'Concerning',color:'text-red-400'};
+const SCORE_BG = (s:number) => s>=70?'bg-emerald-500/15 border-emerald-500/25':s>=55?'bg-slate-700/30 border-slate-600/30':s>=40?'bg-amber-500/15 border-amber-500/25':'bg-red-500/15 border-red-500/25';
 
-interface ProfileRow {
-  ticker: string;
-  composite_score: number;
-  composite_trend: string | null;
-  evasiveness_3q_avg: number | null;
-  guidance_trend: string | null;
-  order_book_health: string | null;
-  last_transcript_date: string | null;
-  last_quarter: string | null;
-  quarters_tracked: number;
-  alert_count_90d: number | null;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const fmtDate = (s: string | null | undefined) => {
-  if (!s) return '—';
-  return new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
+// ── UC metadata ────────────────────────────────────────────────────────────
+const UC_SHORT: Record<number,string> = {
+  1:'Guidance',2:'Evasiveness',3:'Risk Phrases',4:'Capex',5:'Working Capital',
+  6:'Cost Pass-Through',7:'Sector Echo',8:'Legal',9:'KMP Exit',10:'Revenue Mix',
+  11:'Order Inflow',12:'Market Share',13:'Credibility',14:'Churn Risk',
+  15:'R&D Pipeline',16:'Financial Stress',17:'ESG/Labour',18:'Subsidiary',19:'PLI',20:'Analyst Probing',
 };
+const UC_SEVERITY = (n:number) => [1,8,9].includes(n)?'red':[2,5,12,14,16].includes(n)?'amber':'blue';
 
-const scoreCls = (v: number) =>
-  v >= 80 ? 'text-emerald-400' : v >= 60 ? 'text-amber-400' : 'text-red-400';
-
-const scoreBg = (v: number) =>
-  v >= 80 ? 'bg-emerald-500/15 border-emerald-500/30' : v >= 60 ? 'bg-amber-500/15 border-amber-500/30' : 'bg-red-500/15 border-red-500/30';
-
-function SignalChip({ type }: { type?: string }) {
-  if (!type) return null;
-  const map: Record<string, string> = {
-    POSITIVE: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
-    NEUTRAL:  'bg-slate-700/50 text-slate-400 border-slate-600/30',
-    NEGATIVE: 'bg-red-500/20 text-red-300 border-red-500/30',
-    ALERT:    'bg-orange-500/20 text-orange-300 border-orange-500/30',
-  };
-  const cls = map[type] ?? 'bg-slate-700/50 text-slate-400 border-slate-600/30';
-  return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${cls}`}>
-      {type}
-    </span>
-  );
+function extractInsight(uc:number, rj:Record<string,any>): string {
+  if (!rj) return '—';
+  switch(uc) {
+    case 1: return `${rj.guidance_direction||'?'}: ${(rj.delta_summary||'').slice(0,130)}`;
+    case 2: return `Score ${rj.evasiveness_score}/10. Dodged: ${(rj.dodged_topics||[]).slice(0,3).join(', ')||'—'}`;
+    case 3: return `${(rj.new_risk_phrases||[]).length} new risk phrase(s) added`;
+    case 5: return `${rj.wc_trend||'—'}. ${(rj.management_statement||'').slice(0,120)}`;
+    case 7: { const e=rj.sector_echoes?.[0]; return e?`"${(e.quote||'').slice(0,100)}" → ${e.target_sector}` : '—'; }
+    case 8: return `${rj.severity||''} ${(rj.legal_issues||[]).join(', ')||'—'}`.trim();
+    case 9: return (rj.suspicious_exits||[]).map((x:any)=>x.name||x).join(', ')||'—';
+    case 11: return `Order trend: ${rj.order_trend||'—'}${rj.book_value_cr?`. Book ₹${rj.book_value_cr}Cr`:''}`;
+    case 12: return `${rj.market_position||''} ${(rj.competitive_threats||[]).slice(0,2).join(', ')}`.trim()||'—';
+    case 20: { const t=rj.high_probe_topics?.[0]; return t?`${t.distinct_analysts_count} analysts probed "${t.topic}"${t.analyst_skepticism_detected?' (skeptical)':''}` : '—'; }
+    default: { const s=JSON.stringify(rj); return s.length>150?s.slice(0,147)+'…':s; }
+  }
 }
 
-function TrendChip({ trend }: { trend: string | null | undefined }) {
-  if (!trend) return <span className="text-slate-600 text-[11px]">—</span>;
-  const up   = trend === 'IMPROVING' || trend === 'UP';
-  const down = trend === 'DECLINING' || trend === 'DOWN';
-  if (up)   return <span className="inline-flex items-center gap-0.5 text-emerald-400 text-[10px] font-semibold"><TrendingUp className="w-3 h-3"/>{trend}</span>;
-  if (down) return <span className="inline-flex items-center gap-0.5 text-red-400 text-[10px] font-semibold"><TrendingDown className="w-3 h-3"/>{trend}</span>;
-  return           <span className="inline-flex items-center gap-0.5 text-slate-400 text-[10px]"><Minus className="w-3 h-3"/>{trend}</span>;
-}
-
-// ── Ask Alpha Component ───────────────────────────────────────────────────────
+// ── Ask Alpha ──────────────────────────────────────────────────────────────
 const SUGGESTED = [
   'Which stocks show evasiveness trending up?',
   'Compare IT companies on deal pipeline tone',
-  'Which managements have highest credibility?',
-  'Value chain signals in EMS sector this quarter',
+  'What has management said about order inflows?',
+  'Which managements have highest credibility scores?',
 ];
 
 function AskAlpha() {
-  const [query,    setQuery]    = useState('');
-  const [history,  setHistory]  = useState<string[]>([]);
-  const [messages, setMessages] = useState<{role:'user'|'assistant'; text:string}[]>([]);
-  const [thinking, setThinking] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [query, setQuery]   = useState('');
+  const [msgs,  setMsgs]    = useState<{role:'user'|'assistant';text:string}[]>([]);
+  const [hist,  setHist]    = useState<string[]>([]);
+  const [busy,  setBusy]    = useState(false);
+  const [phase, setPhase]   = useState('');
+  const bottom = useRef<HTMLDivElement>(null);
 
-  const ask = async (q: string) => {
-    if (!q.trim() || thinking) return;
-    const userMsg = q.trim();
-    setMessages(m => [...m, { role: 'user', text: userMsg }]);
-    setHistory(h => [...h, userMsg]);
+  const ask = useCallback(async (q:string) => {
+    if (!q.trim() || busy) return;
+    const msg = q.trim();
+    setMsgs(m=>[...m,{role:'user',text:msg}]);
+    setHist(h=>[...h,msg]);
     setQuery('');
-    setThinking(true);
+    setBusy(true);
+    setPhase('Analyzing question…');
+    setMsgs(m=>[...m,{role:'assistant',text:''}]);
+
     let answer = '';
-    setMessages(m => [...m, { role: 'assistant', text: '' }]);
     try {
-      const res = await fetch('/api/alpha-ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMsg, history }),
+      const res = await fetch('/api/alpha-ask',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query:msg, history:hist}),
       });
+      if (!res.ok) { const e=await res.json(); throw new Error(e.error||'Error'); }
+      setPhase('Streaming answer…');
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        answer += dec.decode(value, { stream: true });
-        setMessages(m => { const n = [...m]; n[n.length-1] = { role: 'assistant', text: answer }; return n; });
+      while(true) {
+        const {done,value} = await reader.read();
+        if(done) break;
+        answer += dec.decode(value,{stream:true});
+        setMsgs(m=>{const n=[...m];n[n.length-1]={role:'assistant',text:answer};return n;});
       }
-      setHistory(h => [...h, answer]);
-    } catch (e: any) {
-      setMessages(m => { const n = [...m]; n[n.length-1] = { role: 'assistant', text: `Error: ${e.message}` }; return n; });
-    } finally {
-      setThinking(false);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-    }
-  };
+      setHist(h=>[...h,answer]);
+    } catch(e:any) {
+      setMsgs(m=>{const n=[...m];n[n.length-1]={role:'assistant',text:`⚠️ ${e.message}`};return n;});
+    } finally { setBusy(false); setPhase(''); setTimeout(()=>bottom.current?.scrollIntoView({behavior:'smooth'}),80); }
+  },[busy,hist]);
 
   return (
     <div className="bg-slate-900 border border-violet-700/40 rounded-2xl p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <Brain className="w-5 h-5 text-violet-400" />
-        <h2 className="text-sm font-bold text-violet-300">Ask Alpha</h2>
-        <span className="text-[10px] text-slate-600 ml-1">Powered by DeepSeek V4 Pro</span>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Brain className="w-5 h-5 text-violet-400"/>
+          <span className="text-sm font-bold text-violet-200">Ask Alpha</span>
+          <span className="text-[10px] text-slate-600 ml-1">DeepSeek V4 Pro · RAG over concalls + intelligence DB</span>
+        </div>
+        {msgs.length>0 && <button onClick={()=>{setMsgs([]);setHist([]);}} className="text-[10px] text-slate-600 hover:text-slate-400">Clear</button>}
       </div>
 
-      {messages.length === 0 && (
+      {msgs.length===0 && (
         <div className="flex flex-wrap gap-2 mb-4">
-          {SUGGESTED.map(s => (
-            <button key={s} onClick={() => ask(s)}
-              className="text-xs px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 hover:border-violet-600 hover:text-violet-300 transition-colors">
-              {s}
-            </button>
+          {SUGGESTED.map(s=>(
+            <button key={s} onClick={()=>ask(s)} className="text-xs px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 hover:border-violet-600 hover:text-violet-300 transition-colors">{s}</button>
           ))}
         </div>
       )}
 
-      {messages.length > 0 && (
-        <div className="space-y-3 mb-4 max-h-96 overflow-y-auto pr-1">
-          {messages.map((m, i) => (
-            <div key={i} className={m.role === 'user' ? 'flex justify-end' : ''}>
-              {m.role === 'user' ? (
-                <div className="bg-violet-600/20 border border-violet-600/30 rounded-xl px-4 py-2.5 max-w-[80%]">
-                  <p className="text-sm text-violet-100">{m.text}</p>
-                </div>
-              ) : (
-                <div className="bg-slate-800/60 rounded-xl px-4 py-3 text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
-                  {m.text || <span className="flex items-center gap-2 text-slate-500"><Loader2 className="w-3 h-3 animate-spin"/>Thinking…</span>}
-                </div>
-              )}
+      {msgs.length>0 && (
+        <div className="space-y-3 mb-4 max-h-[420px] overflow-y-auto pr-1 custom-scroll">
+          {msgs.map((m,i)=>(
+            <div key={i} className={m.role==='user'?'flex justify-end':''}>
+              {m.role==='user'
+                ? <div className="bg-violet-600/20 border border-violet-600/30 rounded-xl px-4 py-2.5 max-w-[80%]"><p className="text-sm text-violet-100">{m.text}</p></div>
+                : <div className="bg-slate-800/70 rounded-xl px-4 py-3 text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+                    {m.text || <span className="flex items-center gap-2 text-slate-500"><Loader2 className="w-3 h-3 animate-spin"/>{phase||'Thinking…'}</span>}
+                  </div>
+              }
             </div>
           ))}
-          <div ref={bottomRef} />
+          <div ref={bottom}/>
         </div>
       )}
 
-      <form onSubmit={e => { e.preventDefault(); ask(query); }} className="flex gap-2">
-        <input
-          value={query} onChange={e => setQuery(e.target.value)}
+      <form onSubmit={e=>{e.preventDefault();ask(query);}} className="flex gap-2">
+        <input value={query} onChange={e=>setQuery(e.target.value)} disabled={busy}
           placeholder="Ask anything about your portfolio companies…"
-          className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-600"
-        />
-        <button type="submit" disabled={thinking || !query.trim()}
-          className="px-4 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 rounded-xl transition-colors">
-          {thinking ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Send className="w-4 h-4 text-white" />}
+          className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-600 disabled:opacity-50"/>
+        <button type="submit" disabled={busy||!query.trim()} className="px-4 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 rounded-xl transition-colors">
+          {busy?<Loader2 className="w-4 h-4 animate-spin text-white"/>:<Send className="w-4 h-4 text-white"/>}
         </button>
       </form>
     </div>
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Intelligence Feed (per-stock) ─────────────────────────────────────────
+function StockCard({profile, evals}:{profile:Profile; evals:EvalRow[]}) {
+  const [open, setOpen] = useState(false);
+  const t = TIER(profile.composite_score);
+  const triggered = evals.filter(e=>e.triggered);
+  const notable   = evals.filter(e=>!e.triggered && [11,7,20].includes(e.uc_number) && Object.keys(e.result_json||{}).length>0);
+  const all = [...triggered, ...notable].slice(0,8);
+
+  return (
+    <div className={`border rounded-xl overflow-hidden ${SCORE_BG(profile.composite_score)}`}>
+      <button onClick={()=>setOpen(o=>!o)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors">
+        <span className="text-xs font-black text-slate-400 w-20 shrink-0">{profile.ticker}</span>
+        <span className={`text-xl font-black ${t.color} w-10 shrink-0`}>{profile.composite_score||'—'}</span>
+        <span className={`text-xs font-semibold ${t.color} shrink-0`}>{t.label}</span>
+        {profile.composite_trend==='IMPROVING' && <span className="text-[10px] text-emerald-400 shrink-0">↑ improving</span>}
+        {profile.composite_trend==='DECLINING'  && <span className="text-[10px] text-red-400 shrink-0">↓ declining</span>}
+        {profile.last_quarter && <span className="text-[10px] text-slate-600 ml-auto shrink-0 hidden sm:block">{profile.last_quarter}</span>}
+        {triggered.length>0 && <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 rounded-full px-2 py-0.5 shrink-0">{triggered.length} alert{triggered.length!==1?'s':''}</span>}
+        {open?<ChevronDown className="w-3 h-3 text-slate-600 shrink-0"/>:<ChevronRight className="w-3 h-3 text-slate-600 shrink-0"/>}
+      </button>
+
+      {open && (
+        <div className="border-t border-white/10 px-4 py-3 space-y-2">
+          {profile.guidance_trend && <div className="text-[11px] text-slate-500">Guidance: <span className="text-slate-300">{profile.guidance_trend}</span></div>}
+          {all.length===0 && <p className="text-xs text-slate-600">No significant findings for this stock yet.</p>}
+          {all.map((e,i)=>{
+            const sev = UC_SEVERITY(e.uc_number);
+            const clr = sev==='red'?'border-red-500/40 bg-red-500/10 text-red-300':sev==='amber'?'border-amber-500/40 bg-amber-500/10 text-amber-300':'border-blue-500/40 bg-blue-500/10 text-blue-300';
+            const insight = extractInsight(e.uc_number, e.result_json||{});
+            return (
+              <div key={i} className={`rounded-lg border px-3 py-2 ${clr}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${sev==='red'?'bg-red-500/20':sev==='amber'?'bg-amber-500/20':'bg-blue-500/20'}`}>
+                    {e.triggered?'🔴':'📡'} {UC_SHORT[e.uc_number]||`UC-${e.uc_number}`}
+                  </span>
+                  <span className="text-[10px] text-slate-600 ml-auto">{e.quarter} {e.fiscal_year}</span>
+                </div>
+                <p className="text-xs leading-relaxed text-slate-300">{insight}</p>
+              </div>
+            );
+          })}
+          <Link href={`/portfolio/company/${profile.ticker}`} className="text-[10px] text-violet-500 hover:text-violet-300 block mt-1">Full deep dive →</Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
 export default function AlphaPage() {
-  const [evals,         setEvals]        = useState<EvalRow[]>([]);
-  const [creds,         setCreds]        = useState<CredibilityRow[]>([]);
-  const [profiles,      setProfiles]     = useState<ProfileRow[]>([]);
-  const [loading,       setLoading]      = useState(true);
-  const [error,         setError]        = useState('');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [evals,    setEvals]    = useState<EvalRow[]>([]);
+  const [creds,    setCreds]    = useState<CredRow[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [tab,      setTab]      = useState<'feed'|'credibility'>('feed');
 
-  const loadData = async () => {
-    setLoading(true); setError('');
-    try {
-      const [rawEvals, rawCreds, rawProfiles] = await Promise.all([
-        sb('alpha_evaluations?select=*&triggered=eq.true&order=score.desc&limit=50'),
-        sb('alpha_management_credibility?select=*&order=credibility_score.desc'),
-        sb('alpha_intelligence_profiles?select=*&order=composite_score.desc'),
-      ]);
-      setEvals(Array.isArray(rawEvals) ? rawEvals : []);
-      setCreds(Array.isArray(rawCreds) ? rawCreds : []);
-      setProfiles(Array.isArray(rawProfiles) ? rawProfiles : []);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
-    } finally {
-      setLoading(false);
-    }
+  const load = async () => {
+    setLoading(true);
+    const [rawP, rawE, rawC] = await Promise.all([
+      sb('alpha_intelligence_profiles?select=*&composite_score=gt.0&order=composite_score.desc&limit=60'),
+      sb('alpha_evaluations?select=ticker,uc_number,uc_name,result_json,triggered,quarter,fiscal_year&order=created_at.desc&limit=500'),
+      sb('alpha_management_credibility?select=*&order=credibility_score.desc'),
+    ]);
+    setProfiles(Array.isArray(rawP)?rawP:[]);
+    setEvals(Array.isArray(rawE)?rawE:[]);
+    setCreds(Array.isArray(rawC)?rawC:[]);
+    setLoading(false);
   };
+  useEffect(()=>{load();},[]);
 
-  useEffect(() => { loadData(); }, []);
+  const evalsByTicker = evals.reduce((acc,e)=>{
+    (acc[e.ticker]=acc[e.ticker]||[]).push(e); return acc;
+  }, {} as Record<string,EvalRow[]>);
 
-  const allZeroCred = creds.length > 0 && creds.every(c => c.credibility_score === 0 && c.promises_total === 0);
+  const allZeroCred = creds.every(c=>c.credibility_score===0&&c.promises_total===0);
 
   return (
     <div className="min-h-screen bg-[#0d1117] p-3 md:p-5">
-      <div className="max-w-[1600px] mx-auto space-y-6">
+      <div className="max-w-5xl mx-auto space-y-5">
 
         {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Link href="/" className="text-slate-500 hover:text-slate-300"><ArrowLeft className="w-4 h-4" /></Link>
-              <Brain className="w-5 h-5 text-purple-400" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Brain className="w-6 h-6 text-violet-400"/>
+            <div>
               <h1 className="text-lg font-black text-white">Alpha Engine</h1>
-              <span className="text-[10px] text-slate-500 font-semibold tracking-widest uppercase ml-1">Concall Intelligence</span>
+              <p className="text-xs text-slate-500">Concall Intelligence · 24 dimensions per transcript</p>
             </div>
-            <p className="text-xs text-slate-500 ml-11">
-              Management credibility · Use-case evaluation · Intelligence profiling
-            </p>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/alpha/stocks"
-              className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 rounded text-xs font-semibold transition">
-              Stock Management →
+            <Link href="/alpha/status" className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 border border-slate-800 rounded-lg px-3 py-1.5">
+              <Activity className="w-3 h-3"/>Status
             </Link>
-            <button onClick={loadData} disabled={loading}
-              className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-slate-400 disabled:opacity-50 transition">
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <Link href="/alpha/stocks" className="text-xs text-violet-400 hover:text-violet-300 border border-violet-800/50 rounded-lg px-3 py-1.5">+ Add Stock</Link>
+            <button onClick={load} className="text-xs text-slate-500 hover:text-white border border-slate-800 rounded-lg p-1.5">
+              <RefreshCw className={`w-3 h-3 ${loading?'animate-spin':''}`}/>
             </button>
           </div>
         </div>
 
-        {error && (
-          <div className="bg-red-900/30 border border-red-700/40 rounded-lg px-4 py-2.5 text-red-300 text-xs">
-            {error}
-          </div>
-        )}
+        {/* Ask Alpha */}
+        <AskAlpha/>
 
-        {/* ── Ask Alpha ── */}
-        <AskAlpha />
+        {/* Tabs */}
+        <div className="flex gap-1 border-b border-slate-800 pb-0">
+          {(['feed','credibility'] as const).map(t=>(
+            <button key={t} onClick={()=>setTab(t)}
+              className={`px-4 py-2 text-xs font-semibold rounded-t border-b-2 transition-colors ${tab===t?'border-violet-500 text-violet-300':'border-transparent text-slate-500 hover:text-slate-300'}`}>
+              {t==='feed'?'Intelligence Feed':'Management Credibility'}
+            </button>
+          ))}
+        </div>
 
         {loading ? (
-          <div className="text-center py-24 text-slate-500 text-sm">Loading…</div>
-        ) : (
-          <>
-            {/* ── Section A: Intelligence Feed ── */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-white">Intelligence Feed</h2>
-                <span className="text-[10px] text-purple-400 font-semibold px-2 py-0.5 bg-purple-500/15 border border-purple-500/25 rounded-full">
-                  {evals.length} triggered
-                </span>
+          <div className="text-center py-16 text-slate-600 text-sm">Loading intelligence data…</div>
+        ) : tab==='feed' ? (
+          <div className="space-y-2">
+            {profiles.length===0 ? (
+              <div className="text-center py-12 bg-slate-900 border border-slate-800 rounded-xl">
+                <p className="text-slate-500 text-sm">No intelligence data yet.</p>
+                <p className="text-slate-600 text-xs mt-1">Backfill is running every 15 min. <Link href="/alpha/status" className="text-violet-500 hover:underline">Check status →</Link></p>
               </div>
-
-              {evals.length === 0 ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-10 text-center">
-                  <Brain className="w-7 h-7 text-slate-700 mx-auto mb-3" />
-                  <p className="text-slate-500 text-sm font-medium">No triggered evaluations yet</p>
-                  <p className="text-slate-600 text-xs mt-1">Run the Alpha Engine after ingesting concall transcripts</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {evals.map(ev => (
-                    <div key={ev.id}
-                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-4 transition-colors">
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-white bg-purple-500/20 border border-purple-500/30 px-2 py-0.5 rounded">
-                            {ev.ticker}
-                          </span>
-                          <span className="text-[10px] text-slate-500">{ev.quarter} {ev.fiscal_year}</span>
-                        </div>
-                        <SignalChip type={ev.signal_type} />
-                      </div>
-                      <p className="text-xs text-slate-300 font-medium leading-snug mb-2">
-                        {ev.uc_name || `UC-${ev.uc_number}`}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <span className={`text-sm font-black ${scoreCls(ev.score ?? 0)}`}>
-                          {ev.score ?? 0}
-                        </span>
-                        <span className="text-[10px] text-slate-600">{fmtDate(ev.announce_date)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* ── Section B: Management Credibility Leaderboard ── */}
-            <div className="space-y-3">
-              <h2 className="text-sm font-bold text-white">Management Credibility Leaderboard</h2>
-
-              {creds.length === 0 || allZeroCred ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
-                  <p className="text-slate-500 text-sm font-medium">Backfill in progress — check back after first run</p>
-                  <p className="text-slate-600 text-xs mt-1">Credibility scores populate after 2+ quarters of promise tracking</p>
-                </div>
-              ) : (
-                <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-[#161b22] border-b border-slate-700">
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 w-12">Rank</th>
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Ticker</th>
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Score</th>
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Promises Kept</th>
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Trend</th>
-                          <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Quarters</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {creds.map((c, i) => (
-                          <tr key={c.ticker} className="border-b border-slate-800/60 hover:bg-slate-800/20 transition-colors">
-                            <td className="px-4 py-3 text-slate-600 font-mono text-[11px]">#{i + 1}</td>
-                            <td className="px-4 py-3">
-                              <span className="font-bold text-white text-xs">{c.ticker}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black border ${scoreBg(c.credibility_score)} ${scoreCls(c.credibility_score)}`}>
-                                {c.credibility_score}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-slate-300">
-                              {c.promises_kept ?? 0} / {c.promises_total ?? 0}
-                            </td>
-                            <td className="px-4 py-3">
-                              <TrendChip trend={c.trend} />
-                            </td>
-                            <td className="px-4 py-3 text-slate-500 text-[11px]">{c.quarters_tracked ?? 0}Q</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* ── Section C: Intelligence Scores ── */}
-            <div className="space-y-3">
-              <h2 className="text-sm font-bold text-white">Intelligence Scores</h2>
-
-              {profiles.length === 0 ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
-                  <p className="text-slate-500 text-sm font-medium">No intelligence profiles yet</p>
-                  <p className="text-slate-600 text-xs mt-1">Profiles build after concall evaluations are processed</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {profiles.map(p => (
-                    <div key={p.ticker}
-                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-4 transition-colors">
-                      <div className="flex items-start justify-between mb-3">
-                        <span className="font-black text-white text-sm">{p.ticker}</span>
-                        <TrendChip trend={p.composite_trend} />
-                      </div>
-                      <div className={`text-3xl font-black mb-1 ${scoreCls(p.composite_score ?? 0)}`}>
-                        {p.composite_score ?? 0}
-                      </div>
-                      <div className="text-[10px] text-slate-600 mb-3">composite score</div>
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-slate-500">{p.last_quarter ?? '—'}</span>
-                        <span className="text-slate-600">{p.quarters_tracked ?? 0}Q tracked</span>
-                      </div>
-                      {p.alert_count_90d != null && p.alert_count_90d > 0 && (
-                        <div className="mt-2 text-[10px] text-orange-400 font-semibold">
-                          ⚠ {p.alert_count_90d} alert{p.alert_count_90d !== 1 ? 's' : ''} (90d)
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
+            ) : profiles.map(p=>(
+              <StockCard key={p.ticker} profile={p} evals={evalsByTicker[p.ticker]||[]}/>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            {allZeroCred ? (
+              <div className="text-center py-12 text-slate-600 text-sm">
+                <p>Credibility tracking starts after 2+ concalls are evaluated per stock.</p>
+                <p className="text-xs mt-1 text-slate-700">Backfill in progress.</p>
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-slate-800 text-left">
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Rank</th>
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Ticker</th>
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Credibility</th>
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Promises</th>
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Trend</th>
+                  <th className="px-4 py-2.5 text-slate-500 font-semibold">Qtrs</th>
+                </tr></thead>
+                <tbody>
+                  {creds.filter(c=>c.quarters_tracked>0||c.credibility_score>0).map((c,i)=>{
+                    const sc=c.credibility_score;
+                    const clr=sc>=80?'text-emerald-400':sc>=60?'text-amber-400':'text-red-400';
+                    return <tr key={c.ticker} className="border-b border-slate-800/50 hover:bg-white/2">
+                      <td className="px-4 py-2.5 text-slate-600">#{i+1}</td>
+                      <td className="px-4 py-2.5 font-bold text-white">{c.ticker}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-base font-black ${clr}`}>{sc}</span>
+                        <span className="text-slate-600 ml-1">/100</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-400">{c.promises_kept}/{c.promises_total}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-[10px] font-semibold ${c.trend==='IMPROVING'?'text-emerald-400':c.trend==='DETERIORATING'?'text-red-400':'text-slate-500'}`}>{c.trend||'—'}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-500">{c.quarters_tracked}Q</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
-
-        {/* Footer */}
-        <div className="text-[10px] text-slate-700 pt-2">
-          Alpha Engine · Concall Intelligence · Management Credibility · UC Evaluation
-        </div>
 
       </div>
     </div>

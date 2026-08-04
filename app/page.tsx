@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   RefreshCw, Zap, Layers, Eye, AlertCircle,
   ChevronUp, ChevronDown, TrendingUp, TrendingDown,
-  BarChart2, Target, BookOpen, Wallet, Activity, Crown,
+  BarChart2, Target, BookOpen, Wallet, Activity, Crown, Brain,
 } from 'lucide-react';
 
 interface SectorPulseCard { name: string; score: number; stage: string; }
@@ -292,6 +292,7 @@ export default function ConfluenceHub() {
     { href:'/stage2',        label:'Stage 2',       icon:Layers,    color:'text-blue-400',   border:'border-blue-500/30 hover:border-blue-400/60',     bg:'hover:bg-blue-500/8',    count: s2Total||null,      sub: null },
     { href:'/insider',       label:'Insider Intel', icon:Eye,       color:'text-violet-400', border:'border-violet-500/30 hover:border-violet-400/60', bg:'hover:bg-violet-500/8',  count: insTotal||null,     sub: null },
     { href:'/sector-pulse',  label:'Sector Pulse',  icon:Activity,  color:'text-teal-400',   border:'border-teal-500/30 hover:border-teal-400/60',     bg:'hover:bg-teal-500/8',    count: qualifyingSectors||null, sub: 'Breakout Radar' },
+    { href:'/alpha',         label:'Alpha Engine',  icon:Brain,     color:'text-purple-400', border:'border-purple-500/30 hover:border-purple-400/60',  bg:'hover:bg-purple-500/8',  count: null,                    sub: 'Concall Intel' },
   ];
 
   return (
@@ -350,7 +351,7 @@ export default function ConfluenceHub() {
         </div>
 
         {/* ── Quick Nav ── */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5">
           {navLinks.map(n => {
             const Icon = n.icon;
             return (
@@ -447,6 +448,10 @@ export default function ConfluenceHub() {
                   <span className="hidden sm:inline">{eng.replace('_', ' ')}</span>
                 </button>
               ))}
+              <Link href="/alpha" className="flex items-center gap-1 px-2 py-1 bg-purple-700/80 hover:bg-purple-600 text-white rounded-lg text-[10px] font-semibold transition backdrop-blur-sm">
+                <Brain className="w-2.5 h-2.5"/>
+                <span className="hidden sm:inline">Ask Alpha</span>
+              </Link>
               <button onClick={loadData} disabled={loading}
                 className="p-1.5 bg-white/5 hover:bg-white/10 border border-slate-700/50 rounded-lg disabled:opacity-40 transition">
                 <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${loading?'animate-spin':''}`}/>
@@ -639,6 +644,12 @@ export default function ConfluenceHub() {
                 desc:'NSE Bulk/Block deals · Parikh family · Kacholia · Rare · Institutional flow',
                 gradient:'from-yellow-600/12 to-transparent', border:'border-yellow-500/20 hover:border-yellow-400/40',
                 accent:'text-yellow-400', badge:'Live', badgeStyle:'bg-yellow-500/15 text-yellow-400', count:siTotal,
+              },
+              {
+                href:'/alpha', icon:Brain, title:'Alpha Engine', live:true,
+                desc:'Concall intelligence · Management credibility · UC evaluation · Intelligence profiles',
+                gradient:'from-purple-600/12 to-transparent', border:'border-purple-500/20 hover:border-purple-400/40',
+                accent:'text-purple-400', badge:'Live', badgeStyle:'bg-purple-500/15 text-purple-400', count:null,
               },
               {
                 href:'#', icon:Target, title:'Goals', live:false,

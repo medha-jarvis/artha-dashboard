@@ -124,6 +124,163 @@ function MetricBox({ label, value, color }: { label: string; value: string; colo
   );
 }
 
+// ── Alpha Intelligence component ─────────────────────────────────────────────
+const UC_SHORT: Record<number,string> = {
+  1:'Guidance',2:'Evasiveness',3:'Risk Phrases',4:'Capex',5:'Working Capital',
+  6:'Cost Pass-Through',7:'Sector Echo',8:'Legal',9:'KMP Exit',10:'Revenue Mix',
+  11:'Order Inflow',12:'Market Share',13:'Credibility',14:'Churn Risk',
+  15:'R&D Pipeline',16:'Financial Stress',17:'ESG',18:'Subsidiary',19:'PLI',20:'Analyst Probing',
+};
+const SCORE_TIER = (s: number) =>
+  s >= 85 ? { label: 'High Conviction', cls: 'text-emerald-300' }
+  : s >= 70 ? { label: 'Positive',       cls: 'text-emerald-400' }
+  : s >= 55 ? { label: 'Stable',         cls: 'text-slate-300' }
+  : s >= 40 ? { label: 'Cautious',       cls: 'text-amber-400' }
+  :           { label: 'Concerning',     cls: 'text-red-400' };
+
+function extractInsightCo(uc: number, rj: Record<string,any>): string {
+  if (!rj) return '—';
+  switch (uc) {
+    case 1:  return `${rj.guidance_direction || '?'}: ${(rj.delta_summary || '').slice(0, 160)}`;
+    case 2:  return `Evasiveness ${rj.evasiveness_score}/10. Dodged: ${(rj.dodged_topics || []).slice(0,3).join(', ') || '—'}${rj.worst_exchange?.management ? ` | "${rj.worst_exchange.management.slice(0,120)}"` : ''}`;
+    case 3:  return `${(rj.new_risk_phrases||[]).length} new risk phrase(s): ${(rj.new_risk_phrases||[]).slice(0,3).join(', ')}`;
+    case 4:  return `${rj.capex_status || '—'}: ${(rj.delay_reason || rj.capex_commentary || '').slice(0, 140)}`;
+    case 5:  return `${rj.wc_trend || '—'}. ${(rj.management_statement || rj.wc_commentary || '').slice(0,140)}`;
+    case 6:  return `${rj.pricing_power || '—'}. ${(rj.pass_through_commentary || '').slice(0,140)}`;
+    case 7:  { const e = rj.sector_echoes?.[0]; return e ? `"${(e.quote||'').slice(0,140)}" → ${e.target_sector} (${e.demand_trend})` : '—'; }
+    case 8:  return `Severity: ${rj.severity || '—'}. ${(rj.legal_issues || []).join('; ').slice(0,160) || '—'}`;
+    case 9:  return (rj.suspicious_exits||[]).map((x:any) => `${x.name||x}: ${x.reason||''}`).join('; ').slice(0,200) || '—';
+    case 10: return `${rj.mix_trend || '—'}. ${(rj.mix_commentary || '').slice(0,140)}`;
+    case 11: return `${rj.order_trend || '—'}${rj.book_value_cr ? `. Book ₹${rj.book_value_cr}Cr` : ''}${rj.order_coverage_ratio ? `. Coverage ${rj.order_coverage_ratio}x` : ''}`;
+    case 12: return `${rj.market_position || '—'}. Threats: ${(rj.competitive_threats||[]).slice(0,2).join(', ')}`;
+    case 16: return `${rj.stress_level || '—'}. ${(rj.stress_indicators||[]).slice(0,2).join('; ')}`;
+    case 20: { const t = rj.high_probe_topics?.[0]; return t ? `Top: "${t.topic}" (${t.distinct_analysts_count} analysts${t.analyst_skepticism_detected?' · skeptical':''})` : '—'; }
+    default: { const s = JSON.stringify(rj); return s.length > 200 ? s.slice(0, 197) + '…' : s; }
+  }
+}
+
+function AlphaIntelligence({
+  sym, profile, signals, cred, allEvals
+}: {
+  sym: string;
+  profile: AlphaProfile | null;
+  signals: AlphaSignal[];
+  cred: AlphaCredibility | null;
+  allEvals: AlphaEval[];
+}) {
+  const [selQ, setSelQ] = useState<string>('');
+
+  // Group evals by quarter+FY
+  const quarters = Array.from(new Set(allEvals.map(e => `${e.quarter} ${e.fiscal_year}`))).slice(0, 6);
+  const activeQ  = selQ || quarters[0] || '';
+  const qEvals   = allEvals.filter(e => `${e.quarter} ${e.fiscal_year}` === activeQ);
+
+  // Priority: triggered first, then notable non-triggered UCs
+  const NOTABLE_UCS = [1, 2, 7, 11, 12, 20];
+  const triggered = qEvals.filter(e => e.triggered);
+  const notable   = qEvals.filter(e => !e.triggered && NOTABLE_UCS.includes(e.uc_number) && Object.keys(e.result_json || {}).length > 1);
+  const findings  = [...triggered, ...notable];
+
+  const tier = profile ? SCORE_TIER(profile.composite_score) : null;
+  const hasData = profile || signals.length > 0 || allEvals.length > 0;
+
+  if (!hasData) return (
+    <div className="bg-slate-900 border border-violet-800/20 rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Brain className="w-4 h-4 text-violet-400/50" />
+        <span className="text-xs font-semibold text-violet-300/50 uppercase tracking-wider">Alpha Intelligence</span>
+      </div>
+      <p className="text-xs text-slate-700 text-center py-3">Backfill in progress — intelligence will appear after the first evaluation run.</p>
+    </div>
+  );
+
+  const latestSig = signals[0];
+
+  return (
+    <div className="bg-slate-900 border border-violet-800/40 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Brain className="w-4 h-4 text-violet-400" />
+          <h2 className="text-xs font-semibold text-violet-300 uppercase tracking-wider">Alpha Intelligence</h2>
+        </div>
+        <Link href="/alpha" className="text-xs text-violet-500 hover:text-violet-300">Full Dashboard →</Link>
+      </div>
+
+      {/* Score row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+          {tier ? <>
+            <div className={`text-2xl font-black ${tier.cls}`}>{profile!.composite_score}</div>
+            <div className={`text-[10px] font-semibold mt-0.5 ${tier.cls}`}>{tier.label}</div>
+          </> : <div className="text-2xl font-black text-slate-600">—</div>}
+          <div className="text-[9px] text-slate-600 mt-0.5">/ 100 score</div>
+        </div>
+        <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+          <div className={`text-sm font-bold mt-1 ${latestSig?.entry_exit==='WATCH_BUY'?'text-emerald-400':latestSig?.entry_exit==='REVIEW_EXIT'?'text-red-400':'text-slate-400'}`}>
+            {latestSig?.entry_exit || '—'}
+          </div>
+          <div className="text-[10px] text-slate-500 mt-1">Signal</div>
+        </div>
+        <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+          <div className={`text-2xl font-black ${(cred?.credibility_score||0)>=80?'text-emerald-400':(cred?.credibility_score||0)>=60?'text-amber-400':'text-slate-500'}`}>
+            {cred?.credibility_score != null ? `${cred.credibility_score}` : '—'}
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">{cred?.promises_kept != null ? `${cred.promises_kept}/${cred.promises_total} promises` : 'Credibility'}</div>
+        </div>
+        <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+          <div className="text-2xl font-black text-slate-300">{profile?.quarters_tracked || 0}</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Quarters tracked</div>
+        </div>
+      </div>
+
+      {/* Quarter selector */}
+      {quarters.length > 1 && (
+        <div className="flex gap-1 flex-wrap mb-3">
+          {quarters.map(q => (
+            <button key={q} onClick={() => setSelQ(q)}
+              className={`text-[10px] px-2.5 py-1 rounded-full border transition-colors ${(q===activeQ)?'border-violet-600 text-violet-300 bg-violet-600/15':'border-slate-700 text-slate-500 hover:border-slate-600'}`}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Findings */}
+      {findings.length > 0 ? (
+        <div className="space-y-2">
+          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-2">
+            Key Findings — {activeQ} {triggered.length > 0 ? `(${triggered.length} alert${triggered.length!==1?'s':''})` : '(no alerts)'}
+          </div>
+          {findings.map((e, i) => {
+            const sev = [1,8,9].includes(e.uc_number) ? 'red' : [2,5,12,14,16].includes(e.uc_number) ? 'amber' : 'blue';
+            const clr = sev==='red'
+              ? 'border-red-500/40 bg-red-500/8 text-red-300'
+              : sev==='amber'
+              ? 'border-amber-500/40 bg-amber-500/8 text-amber-300'
+              : 'border-blue-500/30 bg-blue-500/5 text-blue-300';
+            const insight = extractInsightCo(e.uc_number, e.result_json || {});
+            return (
+              <div key={i} className={`border rounded-lg px-3 py-2.5 ${clr}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${sev==='red'?'bg-red-500/20 text-red-300':sev==='amber'?'bg-amber-500/20 text-amber-300':'bg-blue-500/15 text-blue-300'}`}>
+                    {e.triggered ? '🔴' : '📡'} {UC_SHORT[e.uc_number] || `UC-${e.uc_number}`}
+                  </span>
+                  {e.triggered && <span className="text-[9px] text-red-400 font-semibold">TRIGGERED</span>}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">{insight}</p>
+              </div>
+            );
+          })}
+        </div>
+      ) : allEvals.length > 0 ? (
+        <p className="text-xs text-slate-600 text-center py-2">No significant findings for {activeQ}. All clear.</p>
+      ) : (
+        <p className="text-xs text-slate-700 text-center py-2">Evaluation data not yet available.</p>
+      )}
+    </div>
+  );
+}
+
 function RangeBar({ low, high, cur }: { low: number; high: number; cur: number }) {
   const pct = high > low ? Math.max(0, Math.min(100, ((cur - low) / (high - low)) * 100)) : 50;
   return (
@@ -180,7 +337,7 @@ export default function CompanyPage() {
       sb(`alpha_intelligence_profiles?ticker=eq.${sym}&select=*`),
       sb(`alpha_signals?ticker=eq.${sym}&select=*&order=signal_date.desc&limit=4`),
       sb(`alpha_management_credibility?ticker=eq.${sym}&select=*`),
-      sb(`alpha_evaluations?ticker=eq.${sym}&triggered=eq.true&select=ticker,uc_name,uc_number,quarter,fiscal_year,result_json&order=created_at.desc&limit=5`),
+      sb(`alpha_evaluations?ticker=eq.${sym}&select=ticker,uc_name,uc_number,quarter,fiscal_year,result_json,triggered&order=created_at.desc&limit=100`),
     ]).then(([prof, sigs, cred, alerts]) => {
       setAlphaProfile(Array.isArray(prof) && prof.length ? prof[0] : null);
       setAlphaSignals(Array.isArray(sigs) ? sigs : []);
@@ -402,92 +559,7 @@ export default function CompanyPage() {
         )}
 
         {/* Alpha Intelligence */}
-        {(alphaProfile || alphaSignals.length > 0) && (
-          <div className="bg-slate-900 border border-violet-800/40 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Brain className="w-4 h-4 text-violet-400" />
-                <h2 className="text-xs font-semibold text-violet-300 uppercase tracking-wider">Alpha Intelligence</h2>
-              </div>
-              <Link href={`/alpha`} className="text-xs text-violet-500 hover:text-violet-300">Full Dashboard →</Link>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
-                <div className={`text-2xl font-black ${(alphaProfile?.composite_score ?? 0) >= 65 ? 'text-emerald-400' : (alphaProfile?.composite_score ?? 0) >= 45 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {alphaProfile?.composite_score ?? '—'}
-                </div>
-                <div className="text-[10px] text-slate-500 mt-1">Composite Score</div>
-              </div>
-              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
-                <div className={`text-sm font-bold mt-1 ${alphaSignals[0]?.entry_exit === 'WATCH_BUY' ? 'text-emerald-400' : alphaSignals[0]?.entry_exit === 'REVIEW_EXIT' ? 'text-red-400' : 'text-slate-300'}`}>
-                  {alphaSignals[0]?.entry_exit ?? '—'}
-                </div>
-                <div className="text-[10px] text-slate-500 mt-1">Signal</div>
-              </div>
-              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
-                <div className={`text-2xl font-black ${(alphaCred?.credibility_score ?? 0) >= 80 ? 'text-emerald-400' : (alphaCred?.credibility_score ?? 0) >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {alphaCred?.credibility_score != null ? `${alphaCred.credibility_score}%` : '—'}
-                </div>
-                <div className="text-[10px] text-slate-500 mt-1">Mgmt Credibility</div>
-              </div>
-              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
-                <div className="text-sm font-bold text-slate-300 mt-1">
-                  {alphaProfile?.quarters_tracked ?? 0}Q
-                </div>
-                <div className="text-[10px] text-slate-500 mt-1">Tracked</div>
-              </div>
-            </div>
-
-            {alphaProfile && (
-              <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
-                {alphaProfile.guidance_trend && (
-                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
-                    <span className="text-slate-500">Guidance trend</span>
-                    <span className="text-slate-300 font-medium">{alphaProfile.guidance_trend}</span>
-                  </div>
-                )}
-                {alphaProfile.order_book_health && (
-                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
-                    <span className="text-slate-500">Order book</span>
-                    <span className="text-slate-300 font-medium">{alphaProfile.order_book_health}</span>
-                  </div>
-                )}
-                {alphaCred && alphaCred.promises_total > 0 && (
-                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
-                    <span className="text-slate-500">Promises kept</span>
-                    <span className="text-slate-300 font-medium">{alphaCred.promises_kept}/{alphaCred.promises_total}</span>
-                  </div>
-                )}
-                {alphaProfile.alert_count_90d > 0 && (
-                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
-                    <span className="text-slate-500">Alerts (90d)</span>
-                    <span className="text-amber-400 font-medium">{alphaProfile.alert_count_90d}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {alphaAlerts.length > 0 && (
-              <div>
-                <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Recent Triggered Alerts</div>
-                <div className="space-y-1.5">
-                  {alphaAlerts.slice(0, 3).map((a, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                      <span className="text-[10px] font-bold text-amber-400 whitespace-nowrap">UC-{a.uc_number}</span>
-                      <span className="text-xs text-slate-300 truncate">{a.uc_name}</span>
-                      <span className="text-[10px] text-slate-500 ml-auto whitespace-nowrap">{a.quarter} {a.fiscal_year}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {!alphaProfile && alphaSignals.length === 0 && (
-              <p className="text-xs text-slate-600 text-center py-2">Backfill in progress — check back after first run completes.</p>
-            )}
-          </div>
-        )}
+        <AlphaIntelligence sym={sym} profile={alphaProfile} signals={alphaSignals} cred={alphaCred} allEvals={alphaAlerts} />
 
       </div>
     </div>

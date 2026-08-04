@@ -1,186 +1,179 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const SB_URL = 'https://jljwgwftuqrabfyiucfl.supabase.co';
-const SB_KEY = process.env.SUPABASE_SERVICE_KEY ||
-               process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const OR_KEY = process.env.OPENROUTER_API_KEY || '';
-
-const FLASH = 'deepseek/deepseek-v4-flash';
-const PRO   = 'deepseek/deepseek-v4-pro';
+const SB_URL  = 'https://jljwgwftuqrabfyiucfl.supabase.co';
+const SB_KEY  = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const OR_KEY  = process.env.OPENROUTER_API_KEY || '';
+const VPS_API = process.env.API_BASE_URL || 'http://31.97.227.135:5000/api';
+const FLASH   = 'deepseek/deepseek-v4-flash';
+const PRO     = 'deepseek/deepseek-v4-pro';
 
 const VALUE_CHAINS: Record<string, string[]> = {
-  'capex infrastructure':  ['POLYCAB','KEI','INTERARCH'],
-  'electronics ems':       ['DIXON','KAYNES'],
-  'lending nbfc':          ['BAJFINANCE','HDFCBANK','AAVAS','HOMEFIRST'],
-  'it services':           ['INFY','TCS','LTTS','PERSISTENT','OFSS'],
-  'capital markets':       ['IEX','INDIAMART'],
-  'consumer discretionary':['TITAN','KALYANKJIL','SENCO','VBL'],
-  'healthcare':            ['NH','RAINBOW'],
-  'auto mobility':         ['M&M','SHRIPISTON'],
+  'capex infrastructure':   ['POLYCAB','KEI','INTERARCH'],
+  'electronics ems':        ['DIXON','KAYNES'],
+  'lending nbfc':           ['BAJFINANCE','HDFCBANK','AAVAS','HOMEFIRST'],
+  'it services':            ['INFY','TCS','LTTS','PERSISTENT','OFSS'],
+  'capital markets':        ['IEX','INDIAMART'],
+  'consumer discretionary': ['TITAN','KALYANKJIL','SENCO','VBL'],
+  'healthcare':             ['NH','RAINBOW'],
+  'auto mobility':          ['M&M','SHRIPISTON'],
 };
+const ALL_TICKERS = ['AAVAS','APLAPOLLO','BAJFINANCE','CMSINFO','COALINDIA','DIXON','E2E',
+  'HDFCBANK','HOMEFIRST','IEX','INDIAMART','INFY','INTERARCH','KALYANKJIL','KAYNES','KEI',
+  'LTTS','M&M','NH','OFSS','PERSISTENT','PFC','POLYCAB','RAINBOW','REDINGTON','SAGILITY',
+  'SENCO','SHRIPISTON','TCS','TITAN','VBL','VINATIORGA'];
 
-async function sbFetch(path: string) {
-  const r = await fetch(`${SB_URL}/rest/v1/${path}`, {
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
-               'Content-Type': 'application/json' },
-    cache: 'no-store',
-  });
-  return r.ok ? r.json() : [];
+async function sbGet(path: string): Promise<any[]> {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/${path}`, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+      cache: 'no-store',
+    });
+    if (!r.ok) return [];
+    return r.json();
+  } catch { return []; }
+}
+
+async function tsSearch(q: string, tickers: string[]): Promise<string> {
+  if (!q.trim()) return '';
+  try {
+    const ticker = tickers.length ? tickers.slice(0, 8).join(',') : '';
+    const url = `${VPS_API}/ts-search?q=${encodeURIComponent(q)}&limit=6${ticker ? `&ticker=${ticker}` : ''}`;
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) return '';
+    const d = await r.json();
+    return (d.hits || []).map((h: any) =>
+      `[${h.ticker} ${h.quarter}] ${h.snippet}`
+    ).join('\n\n');
+  } catch { return ''; }
 }
 
 async function planQuery(query: string, history: string[]): Promise<any> {
-  const vcJson = JSON.stringify(VALUE_CHAINS);
-  const systemPrompt = `You are a query planner for an Indian stock market intelligence system.
-Value chain groups: ${vcJson}
-Portfolio stocks: AAVAS,APLAPOLLO,BAJFINANCE,CMSINFO,COALINDIA,DIXON,E2E,HDFCBANK,HOMEFIRST,IEX,INDIAMART,INFY,INTERARCH,KALYANKJIL,KAYNES,KEI,LTTS,M&M,NH,OFSS,PERSISTENT,PFC,POLYCAB,RAINBOW,REDINGTON,SAGILITY,SENCO,SHRIPISTON,TCS,TITAN,VBL,VINATIORGA
-
-Parse the user query and return a JSON plan:
-{
-  "intent": "STOCK_SPECIFIC|COMPARISON|SECTOR_THEME|CREDIBILITY|TREND|GENERAL",
-  "tickers": ["array of relevant tickers - expand value chain if theme detected"],
-  "uc_focus": [list of UC numbers 1-24 most relevant, empty=all],
-  "time_filter_quarters": 4,
-  "summary": "one line of what to retrieve"
-}`;
-
   const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${OR_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: FLASH,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: query },
+      messages: [{
+        role: 'system',
+        content: `You plan intelligence queries for an Indian stock portfolio system.
+Value chains: ${JSON.stringify(VALUE_CHAINS)}
+All portfolio tickers: ${ALL_TICKERS.join(',')}
+Return JSON only:
+{"tickers":["list, empty=all"],"uc_focus":[1-24, empty=all triggered],"text_query":"for full-text search","intent":"STOCK|COMPARE|SECTOR|GENERAL"}`
+      }, ...history.slice(-4).map((h,i) => ({role: i%2===0?'user':'assistant',content:h})),
+        {role:'user',content:query}
       ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1, max_tokens: 512,
+      response_format: {type:'json_object'}, temperature: 0, max_tokens: 256,
     }),
   });
-  const d = await r.json();
-  try { return JSON.parse(d.choices[0].message.content); }
-  catch { return { intent: 'GENERAL', tickers: [], uc_focus: [], time_filter_quarters: 4 }; }
+  try {
+    const d = await r.json();
+    return JSON.parse(d.choices?.[0]?.message?.content || '{}');
+  } catch { return {tickers:[],uc_focus:[],text_query:query,intent:'GENERAL'}; }
 }
 
-async function retrieveContext(plan: any): Promise<string> {
-  const parts: string[] = [];
-  const tickers: string[] = plan.tickers || [];
+async function buildContext(plan: any, query: string): Promise<string> {
+  const tickers: string[] = plan.tickers?.length ? plan.tickers : [];
   const ucFocus: number[] = plan.uc_focus || [];
+  const parts: string[] = [];
 
-  // 1. Intelligence profiles
-  if (tickers.length > 0) {
-    const tickerIn = tickers.map((t: string) => `"${t}"`).join(',');
-    const profiles = await sbFetch(
-      `alpha_intelligence_profiles?ticker=in.(${tickers.join(',')})&select=*&limit=20`);
-    if (profiles.length) {
-      parts.push('## Intelligence Profiles\n' + JSON.stringify(profiles, null, 1));
-    }
+  // Parallel fetches — all token-capped
+  const tickerFilter = tickers.length ? `ticker=in.(${tickers.join(',')})` : '';
 
-    // 2. Management credibility
-    const cred = await sbFetch(
-      `alpha_management_credibility?ticker=in.(${tickers.join(',')})&select=*`);
-    if (cred.length) {
-      parts.push('## Management Credibility\n' + JSON.stringify(cred, null, 1));
-    }
+  const [profiles, creds, sigs, evals, tsResults] = await Promise.all([
+    sbGet(`alpha_intelligence_profiles?${tickerFilter || 'composite_score=gt.0'}&select=ticker,composite_score,composite_trend,guidance_trend,order_book_health,evasiveness_3q_avg,last_quarter,quarters_tracked&order=composite_score.desc&limit=15`),
+    sbGet(`alpha_management_credibility?${tickerFilter || ''}&select=ticker,credibility_score,promises_kept,promises_total,trend&order=credibility_score.desc&limit=15`),
+    sbGet(`alpha_signals?${tickerFilter || ''}&select=ticker,composite_score,signal_type,entry_exit,quarter,fiscal_year&order=signal_date.desc&limit=20`),
+    sbGet(`alpha_evaluations?${tickerFilter || 'triggered=eq.true'}&${ucFocus.length ? `uc_number=in.(${ucFocus.join(',')})&` : 'triggered=eq.true&'}select=ticker,uc_number,uc_name,result_json,quarter,fiscal_year&order=created_at.desc&limit=25`),
+    tsSearch(plan.text_query || query, tickers),
+  ]);
 
-    // 3. Triggered evaluations for context
-    let evalPath = `alpha_evaluations?ticker=in.(${tickers.join(',')})&triggered=eq.true&select=ticker,uc_name,uc_number,result_json,quarter,fiscal_year&order=created_at.desc&limit=30`;
-    if (ucFocus.length > 0) {
-      evalPath = `alpha_evaluations?ticker=in.(${tickers.join(',')})&uc_number=in.(${ucFocus.join(',')})&select=ticker,uc_name,uc_number,result_json,quarter,fiscal_year,triggered&order=created_at.desc&limit=40`;
-    }
-    const evals = await sbFetch(evalPath);
-    if (evals.length) {
-      parts.push('## Relevant Evaluations\n' + JSON.stringify(evals, null, 1));
-    }
+  if (profiles.length) parts.push('## Intelligence Profiles\n' + JSON.stringify(profiles).slice(0, 4000));
+  if (creds.some(c => c.promises_total > 0)) parts.push('## Management Credibility\n' + JSON.stringify(creds).slice(0, 2000));
+  if (evals.length) parts.push('## Key Findings (triggered evaluations)\n' + JSON.stringify(evals).slice(0, 6000));
+  if (sigs.length) parts.push('## Latest Signals\n' + JSON.stringify(sigs).slice(0, 2000));
+  if (tsResults) parts.push('## Relevant Transcript Excerpts\n' + tsResults.slice(0, 3000));
 
-    // 4. Recent signals
-    const sigs = await sbFetch(
-      `alpha_signals?ticker=in.(${tickers.join(',')})&select=*&order=signal_date.desc&limit=20`);
-    if (sigs.length) {
-      parts.push('## Recent Signals\n' + JSON.stringify(sigs, null, 1));
-    }
-  } else {
-    // General query — get overview
-    const profiles = await sbFetch(
-      `alpha_intelligence_profiles?select=*&order=composite_score.desc&limit=15`);
-    parts.push('## Top Intelligence Profiles\n' + JSON.stringify(profiles, null, 1));
-
-    const alerts = await sbFetch(
-      `alpha_evaluations?triggered=eq.true&select=ticker,uc_name,result_json,quarter&order=created_at.desc&limit=20`);
-    if (alerts.length) parts.push('## Recent Alerts\n' + JSON.stringify(alerts, null, 1));
-  }
-
-  return parts.join('\n\n').slice(0, 40000);
+  return parts.join('\n\n');
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const { query, history = [] } = await req.json();
-    if (!query?.trim()) return NextResponse.json({ error: 'Empty query' }, { status: 400 });
+  if (!OR_KEY) return NextResponse.json({error:'OpenRouter key not configured'},{status:500});
 
-    // Step 1: Plan
+  const {query, history = []} = await req.json().catch(()=>({query:'',history:[]}));
+  if (!query?.trim()) return NextResponse.json({error:'Empty query'},{status:400});
+
+  try {
+    // Step 1: plan (fast)
     const plan = await planQuery(query, history);
 
-    // Step 2: Retrieve
-    const context = await retrieveContext(plan);
+    // Step 2: retrieve context
+    const context = await buildContext(plan, query);
 
-    // Step 3: Synthesize (streaming)
-    const historyMsgs = (history as string[]).map((h, i) =>
-      ({ role: i % 2 === 0 ? 'user' : 'assistant', content: h }));
+    // Step 3: stream synthesis
+    const histMsgs = (history as string[]).map((h,i) => ({
+      role: (i%2===0?'user':'assistant') as 'user'|'assistant', content: h
+    }));
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const orResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${OR_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: PRO,
         messages: [
-          {
-            role: 'system',
-            content: `You are Medha, an elite Indian equity analyst. Answer questions about portfolio companies using the intelligence data below. Be specific, cite exact numbers from the data, flag contradictions, and suggest follow-up questions. Data covers concall evaluations, management credibility, and composite intelligence scores.
+          { role: 'system', content:
+            `You are Medha, an elite Indian equity analyst. Use the intelligence data below to answer. Be specific, cite numbers, mention quarters, flag contradictions. If data is sparse, say so honestly and suggest what to check.
 
-RETRIEVED CONTEXT:
-${context}`,
-          },
-          ...historyMsgs,
+${context || '(No data yet — backfill may still be running. Answer based on general knowledge and note that live data is being indexed.)'}` },
+          ...histMsgs,
           { role: 'user', content: query },
         ],
-        temperature: 0.3, max_tokens: 1500, stream: true,
+        temperature: 0.3, max_tokens: 1200, stream: true,
       }),
     });
 
-    // Stream the response
-    const encoder = new TextEncoder();
+    if (!orResp.ok) {
+      const err = await orResp.text();
+      return NextResponse.json({error:`OpenRouter error: ${err.slice(0,200)}`},{status:500});
+    }
+
+    // Stream SSE → plain text
+    const enc = new TextEncoder();
     const stream = new ReadableStream({
-      async start(controller) {
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') { controller.close(); return; }
-            try {
-              const j = JSON.parse(data);
-              const t = j.choices?.[0]?.delta?.content;
-              if (t) controller.enqueue(encoder.encode(t));
-            } catch {}
+      async start(ctrl) {
+        const reader = orResp.body!.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        try {
+          while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, {stream:true});
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
+            for (const line of lines) {
+              const clean = line.replace(/^data:\s*/,'').trim();
+              if (!clean || clean === '[DONE]') continue;
+              try {
+                const chunk = JSON.parse(clean);
+                const t = chunk.choices?.[0]?.delta?.content;
+                if (t) ctrl.enqueue(enc.encode(t));
+              } catch {}
+            }
           }
-        }
-        controller.close();
+        } finally { ctrl.close(); }
       },
     });
 
     return new Response(stream, {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8',
-                 'Cache-Control': 'no-cache', 'X-Alpha-Plan': plan.intent },
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store',
+        'X-Accel-Buffering': 'no',
+      },
     });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e:any) {
+    return NextResponse.json({error: e.message}, {status:500});
   }
 }
 
