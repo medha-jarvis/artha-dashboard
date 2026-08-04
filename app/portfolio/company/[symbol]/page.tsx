@@ -2,7 +2,27 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, TrendingUp, TrendingDown, Database } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown, Database, Brain } from 'lucide-react';
+
+interface AlphaProfile {
+  ticker: string; composite_score: number; composite_trend: string;
+  evasiveness_3q_avg: number | null; guidance_trend: string | null;
+  order_book_health: string | null; last_quarter: string | null;
+  quarters_tracked: number; alert_count_90d: number;
+}
+interface AlphaSignal {
+  ticker: string; composite_score: number; score_delta: number | null;
+  signal_type: string; entry_exit: string; quarter: string; fiscal_year: string;
+  uc_triggered: string[] | null;
+}
+interface AlphaCredibility {
+  ticker: string; credibility_score: number; promises_kept: number;
+  promises_total: number; quarters_tracked: number; trend: string;
+}
+interface AlphaEval {
+  ticker: string; uc_name: string; uc_number: number; quarter: string;
+  fiscal_year: string; triggered: boolean; result_json: Record<string, unknown>;
+}
 
 interface CompanyData {
   symbol: string;
@@ -130,6 +150,12 @@ export default function CompanyPage() {
   const [dbHolding, setDbHolding] = useState<DbHolding | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [alphaProfile, setAlphaProfile] = useState<AlphaProfile | null>(null);
+  const [alphaSignals, setAlphaSignals] = useState<AlphaSignal[]>([]);
+  const [alphaCred, setAlphaCred] = useState<AlphaCredibility | null>(null);
+  const [alphaAlerts, setAlphaAlerts] = useState<AlphaEval[]>([]);
+
+  const sb = (path: string) => fetch(`/api/sb/${path}`, { cache: 'no-store' }).then(r => r.json()).catch(() => []);
 
   useEffect(() => {
     if (!sym) return;
@@ -146,6 +172,21 @@ export default function CompanyPage() {
       if (coData?.error) setError(coData.error);
       setLoading(false);
     }).catch(e => { setError(e.message); setLoading(false); });
+  }, [sym]);
+
+  useEffect(() => {
+    if (!sym) return;
+    Promise.all([
+      sb(`alpha_intelligence_profiles?ticker=eq.${sym}&select=*`),
+      sb(`alpha_signals?ticker=eq.${sym}&select=*&order=signal_date.desc&limit=4`),
+      sb(`alpha_management_credibility?ticker=eq.${sym}&select=*`),
+      sb(`alpha_evaluations?ticker=eq.${sym}&triggered=eq.true&select=ticker,uc_name,uc_number,quarter,fiscal_year,result_json&order=created_at.desc&limit=5`),
+    ]).then(([prof, sigs, cred, alerts]) => {
+      setAlphaProfile(Array.isArray(prof) && prof.length ? prof[0] : null);
+      setAlphaSignals(Array.isArray(sigs) ? sigs : []);
+      setAlphaCred(Array.isArray(cred) && cred.length ? cred[0] : null);
+      setAlphaAlerts(Array.isArray(alerts) ? alerts : []);
+    });
   }, [sym]);
 
   if (loading) return (
@@ -353,10 +394,98 @@ export default function CompanyPage() {
             </h2>
             <pre className="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto font-mono bg-slate-800/50 rounded-lg p-3">
               {co.wiki_analysis.content_preview
-                .replace(/^\s*\d+\|\s*/gm, '')  // strip line numbers
+                .replace(/^\s*\d+\|\s*/gm, '')
                 .substring(0, 1200)}
               {(co.wiki_analysis.content_preview.length > 1200) ? '\n…(truncated)' : ''}
             </pre>
+          </div>
+        )}
+
+        {/* Alpha Intelligence */}
+        {(alphaProfile || alphaSignals.length > 0) && (
+          <div className="bg-slate-900 border border-violet-800/40 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-violet-400" />
+                <h2 className="text-xs font-semibold text-violet-300 uppercase tracking-wider">Alpha Intelligence</h2>
+              </div>
+              <Link href={`/alpha`} className="text-xs text-violet-500 hover:text-violet-300">Full Dashboard →</Link>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+                <div className={`text-2xl font-black ${(alphaProfile?.composite_score ?? 0) >= 65 ? 'text-emerald-400' : (alphaProfile?.composite_score ?? 0) >= 45 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {alphaProfile?.composite_score ?? '—'}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">Composite Score</div>
+              </div>
+              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+                <div className={`text-sm font-bold mt-1 ${alphaSignals[0]?.entry_exit === 'WATCH_BUY' ? 'text-emerald-400' : alphaSignals[0]?.entry_exit === 'REVIEW_EXIT' ? 'text-red-400' : 'text-slate-300'}`}>
+                  {alphaSignals[0]?.entry_exit ?? '—'}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">Signal</div>
+              </div>
+              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+                <div className={`text-2xl font-black ${(alphaCred?.credibility_score ?? 0) >= 80 ? 'text-emerald-400' : (alphaCred?.credibility_score ?? 0) >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {alphaCred?.credibility_score != null ? `${alphaCred.credibility_score}%` : '—'}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">Mgmt Credibility</div>
+              </div>
+              <div className="bg-slate-800/60 rounded-lg p-3 text-center">
+                <div className="text-sm font-bold text-slate-300 mt-1">
+                  {alphaProfile?.quarters_tracked ?? 0}Q
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">Tracked</div>
+              </div>
+            </div>
+
+            {alphaProfile && (
+              <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+                {alphaProfile.guidance_trend && (
+                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
+                    <span className="text-slate-500">Guidance trend</span>
+                    <span className="text-slate-300 font-medium">{alphaProfile.guidance_trend}</span>
+                  </div>
+                )}
+                {alphaProfile.order_book_health && (
+                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
+                    <span className="text-slate-500">Order book</span>
+                    <span className="text-slate-300 font-medium">{alphaProfile.order_book_health}</span>
+                  </div>
+                )}
+                {alphaCred && alphaCred.promises_total > 0 && (
+                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
+                    <span className="text-slate-500">Promises kept</span>
+                    <span className="text-slate-300 font-medium">{alphaCred.promises_kept}/{alphaCred.promises_total}</span>
+                  </div>
+                )}
+                {alphaProfile.alert_count_90d > 0 && (
+                  <div className="flex justify-between bg-slate-800/40 rounded px-3 py-2">
+                    <span className="text-slate-500">Alerts (90d)</span>
+                    <span className="text-amber-400 font-medium">{alphaProfile.alert_count_90d}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {alphaAlerts.length > 0 && (
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Recent Triggered Alerts</div>
+                <div className="space-y-1.5">
+                  {alphaAlerts.slice(0, 3).map((a, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                      <span className="text-[10px] font-bold text-amber-400 whitespace-nowrap">UC-{a.uc_number}</span>
+                      <span className="text-xs text-slate-300 truncate">{a.uc_name}</span>
+                      <span className="text-[10px] text-slate-500 ml-auto whitespace-nowrap">{a.quarter} {a.fiscal_year}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!alphaProfile && alphaSignals.length === 0 && (
+              <p className="text-xs text-slate-600 text-center py-2">Backfill in progress — check back after first run completes.</p>
+            )}
           </div>
         )}
 
