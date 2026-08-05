@@ -199,6 +199,11 @@ export default function PEADPage() {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-medium disabled:opacity-50 transition">
               ⏮️ Seed Last 7 Days
             </button>
+            <button onClick={() => dispatch('rescore_nulls')} disabled={!!triggering}
+              title="Re-score entries where fundamentals were null (yfinance lag after results)"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-800 hover:bg-violet-700 text-white rounded text-xs font-medium disabled:opacity-50 transition">
+              🔄 Fix Null Scores
+            </button>
             <button onClick={loadData} disabled={loading}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-medium disabled:opacity-50 transition">
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -351,7 +356,7 @@ export default function PEADPage() {
                       : gap > 0 ? `📈 +${gap.toFixed(1)}%` : `📉 ${gap.toFixed(1)}%`;
 
                     const sym = sig.ticker.replace('.NS','');
-                    const stockscanUrl = `https://www.screener.in/company/${sym}/`;
+                    const stockscanUrl = `https://www.stockscans.in/stocks/${sym}`;
 
                     return (
                       <tr key={sig.id} className={`border-b border-slate-800/50 transition-colors ${rowBg}`}>
@@ -426,7 +431,7 @@ export default function PEADPage() {
               </table>
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} of {signals.length} signals · Ticker links → Screener.in</span>
+              <span>{sorted.length} of {signals.length} signals · Ticker links → StockScans.in</span>
               <span>Returns refresh daily at 4 PM IST · Smart Money = Score &lt;40 &amp; Return &gt;+8%</span>
             </div>
           </div>

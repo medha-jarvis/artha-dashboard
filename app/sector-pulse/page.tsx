@@ -65,7 +65,7 @@ const STAGE_META: Record<string, {
 const getStage = (stage: string) =>
   STAGE_META[stage] ?? STAGE_META['Avoid / Weak'];
 
-type SortKey   = 'score' | 'rs_score' | 'breadth_pct' | 'distance_52w_high' | 'days_in_current_stage';
+type SortKey   = 'score' | 'rs_score' | 'breadth_pct' | 'distance_52w_high' | 'days_in_current_stage' | 'atr_ratio' | 'stage' | 'name' | 'constituent_count';
 type SortDir   = 'asc' | 'desc';
 type FilterKey = 'all' | 'Stage 2A Early Inflection' | 'Stage 2B Sustained Trend' | 'Stage 1 Consolidation' | 'Avoid / Weak';
 
@@ -146,6 +146,13 @@ function ConstituentDrawer({ constituents }: { constituents: Constituent[] | nul
   );
 }
 
+const STAGE_ORDER: Record<string, number> = {
+  'Stage 2A Early Inflection': 4,
+  'Stage 2B Sustained Trend':  3,
+  'Stage 1 Consolidation':     2,
+  'Avoid / Weak':              1,
+};
+
 export default function SectorPulsePage() {
   const [data,       setData]       = useState<SectorScore[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -154,8 +161,12 @@ export default function SectorPulsePage() {
   const [sortKey,    setSortKey]    = useState<SortKey>('score');
   const [sortDir,    setSortDir]    = useState<SortDir>('desc');
   const [filter,     setFilter]     = useState<FilterKey>('all');
+  const [search,     setSearch]     = useState('');
+  const [minScore,   setMinScore]   = useState<number>(0);
   const [triggering, setTriggering] = useState(false);
   const [trigMsg,    setTrigMsg]    = useState<string | null>(null);
+
+  const today = new Date();
 
   const loadData = async () => {
     setLoading(true); setError('');
@@ -195,16 +206,55 @@ export default function SectorPulsePage() {
     else { setSortKey(col); setSortDir('desc'); }
   };
 
+  const daysFromEntry = (row: SectorScore): number | null => {
+    if (!row.stage_entry_date) return row.days_in_current_stage;
+    const entry = new Date(row.stage_entry_date + 'T00:00:00');
+    return Math.floor((today.getTime() - entry.getTime()) / 86400000);
+  };
+
+  const isFreshEntry = (row: SectorScore): boolean => {
+    const d = daysFromEntry(row);
+    return d != null && d <= 14;
+  };
+
+  const constituentCount = (row: SectorScore): number =>
+    (row.top_constituents?.length ?? 0);
+
   const filtered = useMemo(() => {
     let rows = [...data];
-    if (filter !== 'all') rows = rows.filter(r => r.stage === filter);
+    if (filter !== 'all') rows = rows.filter(r => (r.confirmed_stage || r.stage) === filter);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      rows = rows.filter(r => (r.sector_definitions?.name || '').toLowerCase().includes(q));
+    }
+    if (minScore > 0) rows = rows.filter(r => r.score >= minScore);
     rows.sort((a, b) => {
-      const av = (a[sortKey] ?? (sortDir === 'desc' ? -999 : 999)) as number;
-      const bv = (b[sortKey] ?? (sortDir === 'desc' ? -999 : 999)) as number;
-      return sortDir === 'desc' ? bv - av : av - bv;
+      const d = sortDir === 'desc' ? -1 : 1;
+      if (sortKey === 'stage') {
+        const ao = STAGE_ORDER[(a.confirmed_stage || a.stage)] ?? 0;
+        const bo = STAGE_ORDER[(b.confirmed_stage || b.stage)] ?? 0;
+        return d * (ao - bo);
+      }
+      if (sortKey === 'name') {
+        const an = a.sector_definitions?.name ?? '';
+        const bn = b.sector_definitions?.name ?? '';
+        return d * an.localeCompare(bn);
+      }
+      if (sortKey === 'constituent_count') {
+        return d * (constituentCount(a) - constituentCount(b));
+      }
+      if (sortKey === 'days_in_current_stage') {
+        const ad = daysFromEntry(a) ?? (sortDir === 'desc' ? -999 : 999);
+        const bd = daysFromEntry(b) ?? (sortDir === 'desc' ? -999 : 999);
+        return d * (ad - bd);
+      }
+      const av = (a[sortKey] as number | null) ?? (sortDir === 'desc' ? -999 : 999);
+      const bv = (b[sortKey] as number | null) ?? (sortDir === 'desc' ? -999 : 999);
+      return d * (av - bv);
     });
     return rows;
-  }, [data, filter, sortKey, sortDir]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, filter, search, minScore, sortKey, sortDir]);
 
   // Top metrics
   const topSector    = data[0];
@@ -317,11 +367,37 @@ export default function SectorPulsePage() {
           </div>
         )}
 
-        {/* Filter chips */}
+        {/* Search + Filter chips */}
         {data.length > 0 && (
+          <div className="space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="text"
+              placeholder="Search sector…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="px-3 py-1.5 bg-slate-800/80 border border-slate-700/50 rounded-lg text-xs text-white placeholder-slate-600 focus:outline-none focus:border-slate-500 w-44"
+            />
+            {search && (
+              <button onClick={() => setSearch('')} className="text-slate-500 hover:text-slate-300 text-xs">✕ clear</button>
+            )}
+            <div className="flex items-center gap-1.5 ml-2">
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider">Min Score</span>
+              <input
+                type="number" min={0} max={100} step={5}
+                value={minScore || ''}
+                onChange={e => setMinScore(Number(e.target.value) || 0)}
+                placeholder="0"
+                className="w-14 px-2 py-1.5 bg-slate-800/80 border border-slate-700/50 rounded-lg text-xs text-white placeholder-slate-600 focus:outline-none focus:border-slate-500 text-center"
+              />
+              {minScore > 0 && (
+                <button onClick={() => setMinScore(0)} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+              )}
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
             {(['all', 'Stage 2A Early Inflection', 'Stage 2B Sustained Trend', 'Stage 1 Consolidation', 'Avoid / Weak'] as const).map(f => {
-              const count  = f === 'all' ? data.length : data.filter(r => r.stage === f).length;
+              const count  = f === 'all' ? data.length : data.filter(r => (r.confirmed_stage || r.stage) === f).length;
               const meta   = f === 'all' ? null : getStage(f);
               const active = filter === f;
               return (
@@ -337,6 +413,7 @@ export default function SectorPulsePage() {
             })}
             <span className="ml-auto text-xs text-slate-700 self-center">Avg score: {avgScore}/100</span>
           </div>
+          </div>
         )}
 
         {/* Table */}
@@ -345,14 +422,12 @@ export default function SectorPulsePage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-900/90 border-b border-slate-800">
                 <tr>
-                  <th className="px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500 w-48">
-                    Sector <InfoTooltip title="Sector" content="StockScans custom sector index — equal-weighted basket of constituent stocks. Click any row to open the sector's live chart on StockScans. Each sector is scored daily after market close." position="bottom" />
-                  </th>
+                  <Th col="name" label="Sector" active={sortKey === 'name'} dir={sortDir} onSort={onSort}
+                    info="StockScans custom sector index — equal-weighted basket of constituent stocks. Click any row to open the sector's live chart on StockScans. Each sector is scored weekly." />
                   <Th col="score" label="Score" right active={sortKey === 'score'} dir={sortDir} onSort={onSort}
                     info="100-point Techno-Funda composite: Trend Alignment (30pt) + Relative Strength vs Nifty 50 (30pt) + Volatility Contraction/VCP (25pt) + Sector Breadth (15pt). ≥80 = Stage 2A breakout zone. 65–79 = Stage 2B sustained trend. 50–64 = consolidation. Below 50 = avoid." />
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    Stage <InfoTooltip title="Stage Classification" content="Stage 2A Early Inflection (≥80): Trend + RS + VCP all firing — this is the ideal entry zone for investors. Stage 2B Sustained Trend (65–79): Strong trend and RS but no VCP yet — sector is healthy, accumulate quality names on dips. Stage 1 Consolidation (50–64): Resting after a move, not yet breaking out — watchlist. Avoid/Weak (<50): Bear phase, capital at risk." position="bottom" />
-                  </th>
+                  <Th col="stage" label="Stage" active={sortKey === 'stage'} dir={sortDir} onSort={onSort}
+                    info="Stage 2A Early Inflection (≥80): Trend + RS + VCP all firing — ideal entry zone. Stage 2B Sustained Trend (65–79): Strong trend and RS — accumulate on dips. Stage 1 Consolidation (50–64): Resting, on watchlist. Avoid/Weak (<50): Bear phase. A ⟳ badge means stage is PENDING confirmation (2-week rule) — raw score qualifies for new stage but not yet confirmed." />
                   <Th col="rs_score" label="RS vs N50" right active={sortKey === 'rs_score'} dir={sortDir} onSort={onSort}
                     info="Mansfield Relative Strength vs Nifty 50. Measures how much this sector has outperformed (or underperformed) the Nifty 50 over the past 52 weeks. +15% means the sector returned 15% more than Nifty. Positive RS = institutional rotation into this sector. The higher the RS, the stronger the trend. This is worth 30 points in the score." />
                   <Th col="breadth_pct" label="Breadth" right active={sortKey === 'breadth_pct'} dir={sortDir} onSort={onSort}
@@ -361,12 +436,10 @@ export default function SectorPulsePage() {
                     info="How far the sector index is from its 52-week high (as %). -3% means it's 3% below the year's peak. Near 0% or positive = sector is at or making new highs — very bullish. -20% or worse = still recovering from a significant drawdown. Within -12% scores 5 points in Trend Alignment." />
                   <Th col="days_in_current_stage" label="In Stage" active={sortKey === 'days_in_current_stage'} dir={sortDir} onSort={onSort}
                     info="How many days this sector has been in its current confirmed stage (using 2-week confirmation rule). 🆕 0–14 days = golden entry window — trend just confirmed. 15–45 days = active trend, still good for accumulation. 45+ days = established, be more price-selective. Sort ascending to find the freshest stage entries." />
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    ATR Status <InfoTooltip title="ATR (Volatility Contraction)" content="Average True Range ratio: 4-week ATR divided by 12-week ATR (weekly candles). ATR measures weekly price swings. When the ratio drops below 0.70 (Tight VCP), recent weeks are much quieter than usual — a coiling spring before expansion. Worth 25 points in the score." />
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    Above 10W SMA <InfoTooltip title="Stocks Above 10-week SMA" content="Stocks within the sector trading above their 10-week SMA (≈ 50-day SMA on weekly charts). These are the sector leaders driving the breadth score. When investing in a sector, start with companies on this list that also have strong fundamentals." />
-                  </th>
+                  <Th col="atr_ratio" label="ATR / VCP" active={sortKey === 'atr_ratio'} dir={sortDir} onSort={onSort}
+                    info="4-week ATR ÷ 12-week ATR. Measures weekly price swings. Below 0.60 = Tight VCP (coiling spring before expansion, highest score). 0.60–0.70 = Compressed. Above 0.70 = Normal. Sort ascending to find the most contracted sectors. Worth 25 points." />
+                  <Th col="constituent_count" label="Above 10W SMA" active={sortKey === 'constituent_count'} dir={sortDir} onSort={onSort}
+                    info="Stocks within the sector trading above their 10-week SMA (≈ 50-day SMA on weekly charts). These are the sector leaders driving the breadth score. Sortable by count." />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
@@ -378,13 +451,17 @@ export default function SectorPulsePage() {
                   const atrColor = atr == null ? 'text-slate-600' : atr < 0.60 ? 'text-emerald-400' : atr < 0.70 ? 'text-amber-400' : 'text-slate-500';
                   const href = ssUrl(row.sector_definitions?.stockscans_id);
 
+                  const dynDays   = daysFromEntry(row);
+                  const dynFresh  = isFreshEntry(row);
+                  const hasPending = row.stage !== (row.confirmed_stage || row.stage);
+
                   return (
                     <tr key={row.id}
                       onClick={() => window.open(href, '_blank')}
                       className={`hover:bg-slate-800/30 transition-colors cursor-pointer group ${row.score >= 80 ? 'bg-emerald-950/8' : ''}`}>
 
                       {/* Sector name */}
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3.5 w-48">
                         <div className="flex items-center gap-2">
                           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${meta.dot}`} />
                           <span className="font-semibold text-white text-sm group-hover:text-emerald-300 transition-colors">
@@ -399,11 +476,24 @@ export default function SectorPulsePage() {
                         <ScoreGauge score={row.score} />
                       </td>
 
-                      {/* Stage badge — shows confirmed_stage */}
+                      {/* Stage badge — confirmed_stage + pending indicator */}
                       <td className="px-3 py-3.5">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.bg} ${meta.border} ${meta.color}`}>
-                          {meta.short}: {meta.label.split(' ').slice(2).join(' ')}
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border whitespace-nowrap ${meta.bg} ${meta.border} ${meta.color}`}>
+                            {meta.short}: {meta.label.split(' ').slice(2).join(' ')}
+                          </span>
+                          {hasPending && (
+                            <div className="flex items-center gap-0.5">
+                              <span className="text-[9px] text-amber-400 font-semibold px-1">
+                                ⟳ → {getStage(row.stage).short} confirming
+                              </span>
+                              <InfoTooltip
+                                title={`Upgrading to ${getStage(row.stage).short}`}
+                                content={`Raw score ${row.score}/100 qualifies for ${getStage(row.stage).label} but requires 2 consecutive weekly scoring runs for confirmation. Currently in 1-week hold — will confirm next Sunday if score holds. High score in Stage 1 is normal during breakout pending periods.`}
+                              />
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* RS vs Nifty 50 */}
@@ -434,11 +524,11 @@ export default function SectorPulsePage() {
                         {row.distance_52w_high == null ? '—' : `${row.distance_52w_high.toFixed(1)}%`}
                       </td>
 
-                      {/* Days in Stage */}
+                      {/* Days in Stage — computed live from stage_entry_date */}
                       <td className="px-3 py-3.5 text-center">
                         <DaysInStage
-                          days={row.days_in_current_stage}
-                          isFresh={row.is_fresh_entry}
+                          days={dynDays}
+                          isFresh={dynFresh}
                           prevStage={row.prev_stage}
                         />
                       </td>
@@ -449,9 +539,16 @@ export default function SectorPulsePage() {
                         {atr != null && <div className="text-[10px] text-slate-600 font-mono">{atr.toFixed(2)}</div>}
                       </td>
 
-                      {/* Constituents above 50 SMA */}
+                      {/* Constituents above 10W SMA — count + expandable list */}
                       <td className="px-3 py-3.5 max-w-[200px]">
-                        <ConstituentDrawer constituents={row.top_constituents} />
+                        <div className="flex items-center gap-2">
+                          {row.top_constituents?.length ? (
+                            <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-800/30 px-1.5 py-0.5 rounded">
+                              {constituentCount(row)}
+                            </span>
+                          ) : null}
+                          <ConstituentDrawer constituents={row.top_constituents} />
+                        </div>
                       </td>
                     </tr>
                   );

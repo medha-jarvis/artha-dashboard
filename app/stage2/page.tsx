@@ -382,7 +382,7 @@ export default function Stage2Page() {
                       <tr key={sig.id} className={`border-b border-slate-800/50 transition-colors ${rowBg}`}>
                         {/* Ticker + badges */}
                         <td className="px-3 py-2.5 sticky left-0 z-10 whitespace-nowrap" style={{ backgroundColor: stkBg }}>
-                          <a href={`https://www.screener.in/company/${sym}/`} target="_blank" rel="noopener noreferrer"
+                          <a href={`https://www.stockscans.in/stocks/${sym}`} target="_blank" rel="noopener noreferrer"
                             className="font-bold text-white hover:text-blue-400 transition text-sm">{sym}</a>
                           {sig.company_name && (
                             <div className="text-slate-500 text-[10px] truncate max-w-[140px]">{sig.company_name}</div>
@@ -407,9 +407,9 @@ export default function Stage2Page() {
                           <div className="text-[9px] text-slate-600">{sig.tier}</div>
                         </td>
 
-                        {/* Freshness */}
+                        {/* Freshness — computed live from signal_date so it ages daily */}
                         <td className="px-2.5 py-2.5 whitespace-nowrap">
-                          <FreshnessCell days={sig.days_in_stage2} />
+                          <FreshnessCell days={Math.floor((Date.now() - new Date(sig.signal_date + 'T00:00:00').getTime()) / 86400000)} />
                         </td>
 
                         {/* Base Proximity */}
@@ -461,7 +461,7 @@ export default function Stage2Page() {
               </table>
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex justify-between text-[10px] text-slate-600">
-              <span>{sorted.length} setups · Ticker → Screener.in · TV → TradingView · 🔥 PEAD+S2 = Triple Play · ⚡ DIVERGENCE = Smart Money</span>
+              <span>{sorted.length} setups · Ticker → StockScans · TV → TradingView · 🔥 PEAD+S2 = Triple Play · ⚡ DIVERGENCE = Smart Money</span>
               <span>Scans 3:45 PM IST · Returns T+5/T+20/T+60 tracked</span>
             </div>
           </div>
