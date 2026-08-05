@@ -1,31 +1,22 @@
 import { NextResponse } from 'next/server';
 
-const GH_TOKEN = process.env.GITHUB_TOKEN || '';
-const REPO     = 'medha-jarvis/artha-dashboard';
-const GH_HEADERS = {
-  Authorization:          `Bearer ${GH_TOKEN}`,
-  Accept:                 'application/vnd.github+json',
-  'X-GitHub-Api-Version': '2022-11-28',
-  'Content-Type':         'application/json',
-};
+const VPS_API = process.env.API_BASE_URL || 'http://31.97.227.135/api';
 
 export async function POST() {
   try {
-    const r = await fetch(
-      `https://api.github.com/repos/${REPO}/actions/workflows/pulse_cron.yml/dispatches`,
-      {
-        method: 'POST',
-        headers: GH_HEADERS,
-        body: JSON.stringify({ ref: 'main', inputs: { script: 'pulse_engine' } }),
-        signal: AbortSignal.timeout(15000),
-      }
-    );
-    if (r.status === 204) return NextResponse.json({ ok: true, message: 'Sector Pulse scan dispatched — takes ~5 min' });
-    return NextResponse.json({ ok: false, error: await r.text() }, { status: 500 });
+    const r = await fetch(`${VPS_API}/trigger/pulse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await r.json();
+    if (!r.ok) return NextResponse.json({ ok: false, error: data.error || `VPS ${r.status}` }, { status: 500 });
+    return NextResponse.json({ ...data, message: data.message || 'Sector Pulse launched on VPS — takes ~5 min' });
   } catch (e: unknown) {
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'Error' }, { status: 500 });
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
 
-export const dynamic    = 'force-dynamic';
+export const dynamic     = 'force-dynamic';
 export const maxDuration = 30;
