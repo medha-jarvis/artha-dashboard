@@ -296,22 +296,34 @@ def analyse(hist: pd.DataFrame, bench_hist: pd.DataFrame,
     if hist.empty or len(hist) < 210:
         return None
 
+    # Handle MultiIndex columns from newer yfinance versions
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist = hist.xs(hist.columns.get_level_values(1)[0], level=1, axis=1) \
+               if hist.columns.nlevels > 1 else hist
+
+    # Drop any rows where Close is NaN (market data not yet finalized)
+    hist = hist.dropna(subset=["Close"])
+    if len(hist) < 200:
+        return None
+
     close  = hist["Close"].squeeze()
-    volume = hist["Volume"].squeeze()
+    volume = hist["Volume"].fillna(0).squeeze()
     high   = hist["High"].squeeze()
     low    = hist["Low"].squeeze()
 
     # Liquidity
     adtv_20 = float((close * volume).rolling(20).mean().iloc[-1])
-    if adtv_20 < MIN_ADTV:
+    if adtv_20 < MIN_ADTV or pd.isna(adtv_20):
         return None
 
     last_close = float(close.iloc[-1])
+    if pd.isna(last_close) or last_close <= 0:
+        return None
 
     # ── 150-day EMA ───────────────────────────────────────────────────────────
     ema150 = close.ewm(span=150, adjust=False).mean()
     last_ema150 = float(ema150.iloc[-1])
-    if last_close <= last_ema150:
+    if pd.isna(last_ema150) or last_close <= last_ema150:
         return None   # hard filter
 
     # EMA150 slope (20-day angle as % per day)
@@ -537,7 +549,7 @@ def main():
     print("[benchmark] fetching Nifty Total Market...")
     bench_hist = None
     try:
-        bench_hist = yf.Ticker(BENCHMARK).history(period="400d", interval="1d", auto_adjust=True)
+        bench_hist = yf.Ticker(BENCHMARK).history(period="2y", interval="1d", auto_adjust=True)
         time.sleep(1)
     except Exception as e:
         print(f"[benchmark] {e}")
@@ -566,7 +578,7 @@ def main():
 
         try:
             t    = yf.Ticker(ns)
-            hist = t.history(period="400d", interval="1d", auto_adjust=True)
+            hist = t.history(period="2y", interval="1d", auto_adjust=True)
             time.sleep(0.8)
         except Exception as e:
             print(f"-> download failed: {e}")
