@@ -194,13 +194,15 @@ export default function AlphaPage() {
 
   const load = async () => {
     setLoading(true);
-    const [rawP, rawE, rawC] = await Promise.all([
+    const [rawP, rawE, rawC, rawWl] = await Promise.all([
       sb('alpha_intelligence_profiles?select=*&composite_score=gt.0&order=composite_score.desc&limit=60'),
       sb('alpha_evaluations?select=ticker,uc_number,uc_name,result_json,triggered,quarter,fiscal_year&order=created_at.desc&limit=500'),
       sb('alpha_management_credibility?select=*&order=credibility_score.desc'),
+      sb('alpha_watchlist?select=ticker&is_active=eq.true'),
     ]);
-    setProfiles(Array.isArray(rawP)?rawP:[]);
-    setEvals(Array.isArray(rawE)?rawE:[]);
+    const watchlistSet = new Set<string>((Array.isArray(rawWl)?rawWl:[]).map((w:any)=>w.ticker));
+    setProfiles((Array.isArray(rawP)?rawP:[]).filter((p:any)=>watchlistSet.has(p.ticker)));
+    setEvals((Array.isArray(rawE)?rawE:[]).filter((e:any)=>watchlistSet.has(e.ticker)));
     setCreds(Array.isArray(rawC)?rawC:[]);
     setLoading(false);
   };
