@@ -321,7 +321,10 @@ def lifecycle_from_context(
     above_50sma: bool,
     above_150ema: bool,
 ) -> str:
-    if not above_150ema or score < 60:
+    # EXITED = stock is below 150 EMA (true Stage 2 exit)
+    # All stocks stored via analyse() passed the hard filter, so above_150ema=True always.
+    # EXITED should NOT be triggered by score alone — low-scoring stocks are WATCHING.
+    if not above_150ema:
         return "EXITED"
     if score >= 85:
         if days_confirmed >= 30 and above_50sma:
