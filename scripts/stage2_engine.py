@@ -84,8 +84,46 @@ def _nse_index_tickers(index_name: str, session: requests.Session) -> list[str]:
         return []
 
 
+def _nse_equity_csv() -> list[str]:
+    """
+    Download NSE's full equity list CSV (~2200 EQ-series stocks).
+    URL is publicly accessible without session cookies.
+    Filters to EQ and BE series only (excludes ETFs, SME, OFS).
+    """
+    try:
+        import io
+        r = requests.get(
+            "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        df = pd.read_csv(io.StringIO(r.text))
+        # Column name may vary — find the SYMBOL and SERIES columns
+        sym_col    = next((c for c in df.columns if "SYMBOL" in c.upper()), None)
+        series_col = next((c for c in df.columns if "SERIES" in c.upper()), None)
+        if sym_col is None:
+            return []
+        if series_col is not None:
+            df = df[df[series_col].isin(["EQ", "BE"])]
+        symbols = df[sym_col].dropna().str.strip().tolist()
+        # Basic sanity filter
+        symbols = [s for s in symbols if s and s.isalnum() or (len(s) < 20 and s.replace("-", "").replace("&", "").isalnum())]
+        print(f"[universe] NSE CSV: {len(symbols)} EQ+BE series stocks")
+        return symbols
+    except Exception as e:
+        print(f"[universe] NSE CSV failed: {e}")
+        return []
+
+
 def get_universe_tickers() -> list[str]:
-    """NSE 500 + Smallcap 250 + Microcap 250 (~700 unique, covers >₹100 Cr market cap)."""
+    """
+    Universe: tries 3 sources in order:
+      1. NSE index API (N500 + SC250 + MC250) — ~700 stocks, needs session
+      2. NSE equity CSV — ~2200 EQ stocks (full NSE listed, no session needed)
+      3. Hardcoded curated Nifty 500 list — 174 stocks (last resort)
+    ADTV filter (₹1 Cr) in analyse() handles the >₹100 Cr market cap screening.
+    """
+    # Try 1: NSE index API
     try:
         session = requests.Session()
         session.headers.update(NSE_HEADERS)
@@ -99,7 +137,15 @@ def get_universe_tickers() -> list[str]:
             print(f"[universe] N500={len(n500)} SC250={len(sc250)} MC250={len(mc250)} → {len(all_t)} unique")
             return all_t
     except Exception as e:
-        print(f"[universe] NSE session failed: {e}, using fallback")
+        print(f"[universe] NSE index API failed: {e}")
+
+    # Try 2: NSE equity CSV (full NSE listing, no session needed)
+    csv_tickers = _nse_equity_csv()
+    if len(csv_tickers) > 500:
+        return csv_tickers
+
+    # Try 3: hardcoded fallback
+    print("[universe] falling back to hardcoded list")
     return get_nifty500_tickers()
 
 
