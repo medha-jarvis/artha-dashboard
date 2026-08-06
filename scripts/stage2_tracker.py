@@ -130,10 +130,6 @@ def main():
             {"signal_id": sig_id, **updates}, on_conflict="signal_id"
         ).execute()
 
-        # Keep days_in_stage2 fresh — measured from entry_date
-        days_live = (today - entry_date).days
-        sb.table("stage2_signals").update({"days_in_stage2": days_live}).eq("id", sig_id).execute()
-
     print("[done]")
 
 

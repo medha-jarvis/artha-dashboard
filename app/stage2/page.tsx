@@ -351,7 +351,7 @@ export default function Stage2Page() {
   // Mode filter
   const modeFiltered = useMemo(() => {
     const daysLive = (s: Signal) =>
-      Math.floor((Date.now() - new Date(s.signal_date + 'T00:00:00').getTime()) / 86400000);
+      s.days_in_stage2 ?? Math.floor((Date.now() - new Date((s.entry_date || s.signal_date) + 'T00:00:00').getTime()) / 86400000);
     switch (filter) {
       case 'high_conviction': return dateFiltered.filter(s => s.stage2_score >= 75);
       case 'emerging':        return dateFiltered.filter(s => s.stage2_score >= 55 && s.stage2_score < 75);
@@ -533,8 +533,10 @@ export default function Stage2Page() {
                     const s   = sig.stage2_score;
                     const lc  = sig.lifecycle_state || 'WATCHING';
                     const sym = sig.ticker.replace(/\.NS$/i, '');
-                    const daysLive = Math.floor(
-                      (Date.now() - new Date(sig.signal_date + 'T00:00:00').getTime()) / 86400000
+                    // Use DB-computed days_in_stage2 (days continuously above EMA150)
+                    // signal_date is always today's engine run — not the actual stage entry date
+                    const daysLive = sig.days_in_stage2 ?? Math.floor(
+                      (Date.now() - new Date((sig.entry_date || sig.signal_date) + 'T00:00:00').getTime()) / 86400000
                     );
                     const rowBg = lc === 'SUSTAINED' ? 'bg-cyan-950/15 hover:bg-cyan-950/30'
                                 : lc === 'CONFIRMED' ? 'bg-emerald-950/15 hover:bg-emerald-950/30'
