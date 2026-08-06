@@ -221,6 +221,10 @@ const TIPS: Record<string, { title: string; content: string }> = {
     title: 'Fundamental Quality (EPS and ROCE)',
     content: 'EPS = Earnings Per Share growth year over year. ROCE = Return on Capital Employed. Double up-arrows means EPS has been accelerating for 2 or more consecutive quarters, a Minervini hallmark for potential multi-baggers. EPS above 20% with ROCE above 15% = strong engine behind the breakout. Stocks with accelerating earnings sustain Stage 2 moves far longer than those breaking out on sentiment alone.',
   },
+  mas: {
+    title: 'Moving Average Alignment (3 dots)',
+    content: 'Three coloured dots showing alignment of the three key moving averages. Left dot = 200-day SMA: price above it means the long-term trend is up (Stage 2 foundation). Middle dot = 50-day SMA: price above it means the intermediate trend is up (continuation strength). Right dot = EMA150 slope: the 150-day exponential MA is rising, confirming the trend is accelerating, not just flat. Minervini SEPA requires ALL THREE green for a fully confirmed Stage 2 entry. Any red dot means one MA is misaligned — tighten stops if you are already holding.',
+  },
   signal_date: {
     title: 'Stage 2 Entry Date',
     content: 'The date this stock first qualified for Stage 2 in its current run. Recent entry date combined with low freshness days = fresh opportunity where the move has barely started.',
@@ -516,7 +520,7 @@ export default function Stage2Page() {
                     <Th col="volume_multiplier"       label="Brk Vol"      active={sortKey==='volume_multiplier'}      dir={sortDir} onSort={onSort} />
                     <Th col="rs_trend"                label="RS (63d)"     active={sortKey==='rs_trend'}               dir={sortDir} onSort={onSort} />
                     <Th col="rs_52w_percentile"       label="52W %ile"     active={sortKey==='rs_52w_percentile'}      dir={sortDir} onSort={onSort} right />
-                    <ThStatic label="MAs" />
+                    <ThStatic label="MAs" tipKey="mas" />
                     <Th col="ttm_eps_growth"          label="Fundamentals" active={sortKey==='ttm_eps_growth'}         dir={sortDir} onSort={onSort} />
                     <Th col="signal_date"             label="Entry"        active={sortKey==='signal_date'}            dir={sortDir} onSort={onSort} />
                     <Th col="returns_since_breakout"  label="Return %"     active={sortKey==='returns_since_breakout'} dir={sortDir} onSort={onSort} right />

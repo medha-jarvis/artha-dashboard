@@ -29,6 +29,9 @@ TODAY = date.today().isoformat()
 BENCHMARK  = "^CRSLDX"
 MIN_ADTV   = 50_000_000   # ₹5 Cr
 LOOKBACK   = 310
+EMA_PERIOD = 150
+VOL_SMA    = 20
+RS_PERIOD  = 63
 
 NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -165,17 +168,32 @@ def compute_stage2_score(metrics: dict, is_sustained: bool = False) -> int:
         elif eps > 0:
             score += 1
 
-    # Bonuses
+    # (8) Sustained Leader bonus — extended leaders (60+ days) with high RS and all MAs aligned
+    # Minervini continues to hold/enter continuation patterns on confirmed market leaders.
+    # This compensates for lost freshness pts when a stock has been above EMA150 a long time
+    # but retains top-decile RS rank and full MA alignment (still in the right zip code).
+    rs_52w_pct = metrics.get("rs_52w_percentile")
+    if (
+        (metrics.get("days_in_stage2") or 0) > 60 and
+        metrics.get("above_200sma") and
+        metrics.get("above_50sma") and
+        (metrics.get("ema150_slope", 0) or 0) > 0 and
+        rs_52w_pct is not None and rs_52w_pct >= 85
+    ):
+        score += 5
+
+    # SUSTAINED lifecycle bonus: counteracts freshness decay for proven 30d+ CONFIRMED trends
     if is_sustained:
-        score += 3   # SUSTAINED bonus: counteracts freshness decay for proven trends
+        score += 3
 
     return min(100, score)
 
 
 def tier_from_score(score: int) -> str:
+    # tier column only allows CONFIRMED/EMERGING/NONE (DB constraint)
+    # lifecycle_state handles WATCHING/SUSTAINED/WEAKENING/EXITED differentiation
     if score >= 75: return "CONFIRMED"
     if score >= 55: return "EMERGING"
-    if score >= 40: return "WATCHING"
     return "NONE"
 
 

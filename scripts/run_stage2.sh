@@ -10,7 +10,11 @@ export TELEGRAM_CHAT_ID="$(cat /root/.env.artha 2>/dev/null | grep TELEGRAM_CHAT
 LOG="/root/artha-dashboard/logs/stage2_$(date +%Y%m%d).log"
 mkdir -p "$(dirname "$LOG")"
 
-echo "=== Stage2 run $(date) ===" >> "$LOG"
+echo "=== Stage2 engine run $(date) ===" >> "$LOG"
 cd /root/artha-dashboard
 python3 scripts/stage2_engine.py >> "$LOG" 2>&1
-echo "=== done $(date) ===" >> "$LOG"
+echo "=== engine done $(date) ===" >> "$LOG"
+
+echo "=== Stage2 tracker run $(date) ===" >> "$LOG"
+python3 scripts/stage2_tracker.py >> "$LOG" 2>&1
+echo "=== tracker done $(date) ===" >> "$LOG"
