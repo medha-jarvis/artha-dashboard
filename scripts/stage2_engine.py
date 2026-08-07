@@ -507,19 +507,43 @@ def analyse(hist: pd.DataFrame, bench_hist: pd.DataFrame, ticker_obj: yf.Ticker)
 
     # ── RS vs Nifty Total Market — 63-day slope ───────────────────────────────
     rs_63d_score, rs_trend = 0.0, "Flat"
+    rs_line_new_high = False
     try:
         if bench_hist is not None and not bench_hist.empty:
             bc = bench_hist["Close"].squeeze().reindex(close.index, method="ffill")
-            if len(bc.dropna()) >= RS_PERIOD:
-                rs_line = close / bc
-                rs_vals = rs_line.dropna().iloc[-RS_PERIOD:].values
-                if len(rs_vals) >= RS_PERIOD:
+            bc_clean = bc.dropna()
+            if len(bc_clean) >= RS_PERIOD:
+                rs_line = (close.reindex(bc_clean.index) / bc_clean).dropna()
+                if len(rs_line) >= RS_PERIOD:
+                    rs_vals = rs_line.iloc[-RS_PERIOD:].values
                     rs_start = float(rs_vals[0])
                     rs_end   = float(rs_vals[-1])
                     rs_63d_score = round((rs_end - rs_start) / abs(rs_start) * 100, 2) if rs_start != 0 else 0
                     rs_trend = "Positive" if rs_63d_score > 5 else "Negative" if rs_63d_score < -5 else "Flat"
+                    # RS line new high: current RS value is within 0.5% of its 252-day high
+                    lookback = min(252, len(rs_line))
+                    rs_line_new_high = bool(float(rs_line.iloc[-1]) >= float(rs_line.tail(lookback).max()) * 0.995)
     except Exception:
         pass
+
+    # ── ADR % (Average Daily Range — Minervini sizing tool) ───────────────────
+    adr_pct = round(float(((high - low) / close).tail(20).mean() * 100), 2)
+
+    # ── 52-week price position (must be ≥75% for Minervini SEPA) ─────────────
+    n_52w = min(252, len(high))
+    high_52w = float(high.tail(n_52w).max())
+    low_52w  = float(low.tail(n_52w).min())
+    price_52w_pos = round((last_close - low_52w) / (high_52w - low_52w) * 100, 1) \
+                    if (high_52w - low_52w) > 0 else 50.0
+
+    # ── Base width: weeks since stock last made its 52-week high ──────────────
+    try:
+        recent_highs     = high.tail(n_52w)
+        idx_52w_high     = recent_highs.idxmax()
+        days_since_peak  = max(0, (close.index[-1] - idx_52w_high).days)
+        base_width_weeks = days_since_peak // 7
+    except Exception:
+        base_width_weeks = 0
 
     # ── Legacy VCP (retained for display) ────────────────────────────────────
     vcp_vol_ratio, vcp_adr_ratio, vcp_score = compute_vcp(hist)
@@ -558,6 +582,11 @@ def analyse(hist: pd.DataFrame, bench_hist: pd.DataFrame, ticker_obj: yf.Ticker)
         "rs_trend":                 rs_trend,
         "rs_63d_score":             rs_63d_score,
         "rs_52w_raw":               rs_52w_raw,
+        "rs_line_new_high":         rs_line_new_high,
+        # New v3.1 metrics
+        "adr_pct":                  adr_pct,
+        "price_52w_position":       price_52w_pos,
+        "base_width_weeks":         base_width_weeks,
         # Legacy VCP (display only)
         "vcp_volume_ratio":         vcp_vol_ratio,
         "vcp_adr_ratio":            vcp_adr_ratio,
@@ -587,7 +616,7 @@ def get_recent_signal_history() -> dict:
     cutoff = (date.today() - timedelta(days=10)).isoformat()
     try:
         resp = sb.table("stage2_signals") \
-            .select("ticker,signal_date,stage2_score,lifecycle_state,entry_date") \
+            .select("ticker,signal_date,stage2_score,lifecycle_state,entry_date,stage2_subtype,is_reentry") \
             .gte("signal_date", cutoff) \
             .order("signal_date", desc=False) \
             .execute()
@@ -603,6 +632,43 @@ def get_recent_signal_history() -> dict:
         return {}
 
 
+def get_base_counts() -> dict[str, int]:
+    """Return {ticker: reentry_count} — base_count = reentry_count + 1."""
+    try:
+        resp = sb.table("stage2_signals").select("ticker").eq("is_reentry", True).execute()
+        counts: dict[str, int] = {}
+        for row in (resp.data or []):
+            t = row["ticker"]
+            counts[t] = counts.get(t, 0) + 1
+        return counts
+    except Exception as e:
+        print(f"[base_counts] {e}")
+        return {}
+
+
+def write_transition(
+    ticker: str,
+    from_sub: str | None, to_sub: str | None,
+    from_lc:  str | None, to_lc:  str | None,
+    price: float,
+) -> None:
+    """Log a sub-type or lifecycle state change to the transitions table."""
+    if from_sub == to_sub and from_lc == to_lc:
+        return
+    try:
+        sb.table("stage2_transitions").insert({
+            "ticker":              ticker,
+            "from_subtype":        from_sub,
+            "to_subtype":          to_sub,
+            "from_lifecycle":      from_lc,
+            "to_lifecycle":        to_lc,
+            "transition_date":     TODAY,
+            "price_at_transition": price,
+        }).execute()
+    except Exception as e:
+        print(f"  [transition] {ticker}: {e}")
+
+
 # ── DB upsert ─────────────────────────────────────────────────────────────────
 def upsert_signal(
     ticker: str, metrics: dict, score: int, components: dict,
@@ -612,6 +678,7 @@ def upsert_signal(
     score_3d_delta: int | None, score_trend: str,
     entry_date_val: str, is_reentry: bool, reentry_gap: int | None,
     rs_52w_percentile: int | None,
+    base_count: int = 1,
     signal_date_override: str | None = None,
 ) -> str | None:
 
@@ -643,6 +710,13 @@ def upsert_signal(
         "rs_trend":                  metrics.get("rs_trend"),
         "rs_63d_score":              metrics.get("rs_63d_score"),
         "rs_52w_percentile":         rs_52w_percentile,
+        "rs_line_new_high":          metrics.get("rs_line_new_high", False),
+        # v3.1 new metrics
+        "adr_pct":                   metrics.get("adr_pct"),
+        "price_52w_position":        metrics.get("price_52w_position"),
+        "base_width_weeks":          metrics.get("base_width_weeks"),
+        "base_count":                base_count,
+        "is_active":                 True,
         # Legacy VCP (display)
         "vcp_volume_ratio":          metrics.get("vcp_volume_ratio"),
         "vcp_adr_ratio":             metrics.get("vcp_adr_ratio"),
@@ -737,9 +811,10 @@ def main():
     except Exception as e:
         print(f"[benchmark] {e}")
 
-    pead_set = get_pead_high_scorers()
-    history  = get_recent_signal_history()
-    print(f"[pead] {len(pead_set)} | [history] {len(history)} tickers with recent data")
+    pead_set    = get_pead_high_scorers()
+    history     = get_recent_signal_history()
+    base_counts = get_base_counts()
+    print(f"[pead] {len(pead_set)} | [history] {len(history)} | [base_counts] {len(base_counts)} tickers")
 
     # Pass 1: download + filter + collect 52W raw returns
     print("[pass1] downloading and analysing...")
@@ -841,6 +916,15 @@ def main():
         if is_reentry:
             score = min(100, score + 2)
 
+        # Transitions: log sub-type or lifecycle state changes
+        last_hist = ticker_hist[-1] if ticker_hist else None
+        prev_subtype  = last_hist.get("stage2_subtype") if last_hist else None
+        prev_lc_state = last_hist.get("lifecycle_state") if last_hist else None
+        write_transition(ticker, prev_subtype, metrics.get("stage2_subtype"),
+                         prev_lc_state, lifecycle, metrics["close"])
+
+        base_count_val = base_counts.get(ticker, 0) + 1
+
         # Company info
         company_name = sector = None
         try:
@@ -857,7 +941,7 @@ def main():
             company_name, sector, is_pead, is_smd,
             score_3d_delta, score_trend,
             entry_date_val, is_reentry, reentry_gap,
-            rs_52w_pct,
+            rs_52w_pct, base_count_val,
         )
 
         subtype = metrics.get("stage2_subtype", "")
@@ -887,6 +971,18 @@ def main():
         f"\n[done] {len(results_map)} qualified | "
         f"{len(confirmed_list)} CONFIRMED | {len(emerging_list)} EMERGING"
     )
+
+    # Mark all non-today signals as inactive, today's as active
+    try:
+        cutoff_90d = (date.today() - timedelta(days=90)).isoformat()
+        sb.table("stage2_signals").update({"is_active": False}) \
+          .gte("signal_date", cutoff_90d).neq("signal_date", TODAY).execute()
+        sb.table("stage2_signals").update({"is_active": True}) \
+          .eq("signal_date", TODAY).execute()
+        print(f"[is_active] activated {len(confirmed_list)+len(emerging_list)} signals from {TODAY}")
+    except Exception as e:
+        print(f"[is_active] {e}")
+
     send_telegram(confirmed_list, emerging_list)
 
 
