@@ -163,7 +163,13 @@ def get_delivery_pct(session: requests.Session, ticker: str, result_date: str) -
     row = df[df["SYMBOL"] == sym]
     if row.empty:
         return None
-    return _clean(float(row["DELIV_PER"].iloc[0]))
+    try:
+        val = str(row["DELIV_PER"].iloc[0]).strip()
+        if not val or val in ('-', '--', 'N/A', 'NA', ''):
+            return None
+        return _clean(float(val))
+    except (ValueError, TypeError):
+        return None
 
 
 # ── Quarterly fundamentals ─────────────────────────────────────────────────────
