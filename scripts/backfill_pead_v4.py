@@ -70,10 +70,11 @@ def backfill() -> None:
             vol_mult=vol_mult, intraday_gap=intraday_gap,
             price_vs_ema200=price_vs_ema, ttm_pe=ttm_pe,
         )
-        path   = path_from_score(score)
-        hidden = compute_hidden_catalyst(
+        path       = path_from_score(score)
+        hidden     = compute_hidden_catalyst(
             yoy_profit, yoy_revenue, vol_mult, delivery_pct, intraday_gap
         )
+        market_cap = _clean(fund.get("market_cap"))
 
         try:
             supabase.table("pead_signals").update({
@@ -82,6 +83,7 @@ def backfill() -> None:
                 "qoq_profit_pct":     qoq_profit,
                 "delivery_pct":       delivery_pct,
                 "is_hidden_catalyst": hidden,
+                "market_cap":         market_cap,
             }).eq("id", sig_id).execute()
             print(f"score={score} path={path} del={delivery_pct}% → ✓")
             ok += 1

@@ -44,16 +44,18 @@ NSE_HEADERS = {
 }
 
 
-# ── NaN / Inf guard ────────────────────────────────────────────────────────────
+# ── NaN / Inf / str guard ──────────────────────────────────────────────────────
 def _clean(v):
-    """Convert float NaN / Inf → None so Supabase JSON stays valid."""
+    """Coerce to numeric; convert NaN/Inf/non-numeric → None for Supabase JSON."""
     if v is None:
         return None
     try:
+        if isinstance(v, str):
+            v = float(v)          # yfinance occasionally returns numeric strings
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
             return None
-    except Exception:
-        pass
+    except (ValueError, TypeError):
+        return None
     return v
 
 
@@ -176,13 +178,14 @@ def get_delivery_pct(session: requests.Session, ticker: str, result_date: str) -
 def get_quarterly_fundamentals(ticker: str) -> dict:
     ns  = ticker if ticker.endswith(".NS") else ticker + ".NS"
     out = dict(yoy_profit=None, yoy_revenue=None, opm_bps=None,
-               qoq_profit=None, ttm_pe=None, company_name=None, sector=None)
+               qoq_profit=None, ttm_pe=None, market_cap=None, company_name=None, sector=None)
     try:
         t   = yf.Ticker(ns)
         inf = t.info
         out["company_name"] = inf.get("longName") or inf.get("shortName")
         out["sector"]       = inf.get("sector")
         out["ttm_pe"]       = _clean(inf.get("trailingPE"))
+        out["market_cap"]   = _clean(inf.get("marketCap"))
 
         qf = t.quarterly_financials
         if qf is None or qf.empty or qf.shape[1] < 5:
@@ -349,7 +352,7 @@ def path_from_score(score: int) -> str:
 def upsert_signal(ticker, company_name, sector, signal_date, score, trigger_path,
                   yoy_profit, yoy_revenue, opm_bps, qoq_profit,
                   price_vs_ema, vol_mult, intraday_gap, ttm_pe,
-                  delivery_pct, is_hidden_catalyst) -> str | None:
+                  delivery_pct, is_hidden_catalyst, market_cap=None) -> str | None:
     row = {
         "ticker":              ticker,
         "company_name":        company_name,
@@ -367,6 +370,7 @@ def upsert_signal(ticker, company_name, sector, signal_date, score, trigger_path
         "ttm_pe":              _clean(ttm_pe),
         "delivery_pct":        _clean(delivery_pct),
         "is_hidden_catalyst":  bool(is_hidden_catalyst),
+        "market_cap":          _clean(market_cap),
     }
     try:
         res = supabase.table("pead_signals").upsert(
@@ -451,6 +455,7 @@ def main(target_date: str | None = None) -> None:
             price_vs_ema=tech["price_vs_ema200_pct"], vol_mult=tech["vol_mult"],
             intraday_gap=tech["intraday_gap_pct"], ttm_pe=fund["ttm_pe"],
             delivery_pct=delivery, is_hidden_catalyst=hidden,
+            market_cap=fund["market_cap"],
         )
         print(f"score={score} path={path} profit={fund['yoy_profit']}% del={delivery}% → {'✓' if sig_id else '✗'}")
 
