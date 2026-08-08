@@ -28,7 +28,8 @@ Lifecycle states (revised thresholds vs v2.1):
   WEAKENING  : score dropped >12 pts in 5 days OR price crossed below 50 SMA
   EXITED     : failed knockout OR below 150 EMA (Stage 2 over)
 
-Universe: NSE Nifty 500 + Smallcap 250 + Microcap 250 (~700 unique stocks)
+Universe: NSE full equity CSV (~2200 EQ+BE stocks, no session needed)
+Fallback: Nifty 500 + Smallcap 250 + Microcap 250 (~700 unique stocks)
 ADTV filter: ₹1Cr minimum (covers ≥₹100Cr market cap range)
 
 Medha modification (turnaround tier, Fundamental):
@@ -118,12 +119,17 @@ def _nse_equity_csv() -> list[str]:
 def get_universe_tickers() -> list[str]:
     """
     Universe: tries 3 sources in order:
-      1. NSE index API (N500 + SC250 + MC250) — ~700 stocks, needs session
-      2. NSE equity CSV — ~2200 EQ stocks (full NSE listed, no session needed)
-      3. Hardcoded curated Nifty 500 list — 174 stocks (last resort)
+      1. NSE equity CSV — ~2200 EQ+BE stocks (full NSE listing, no session needed) [PRIMARY]
+      2. NSE index API (N500 + SC250 + MC250) — ~700 stocks, needs session [fallback]
+      3. Hardcoded curated Nifty 500 list — 174 stocks [last resort]
     ADTV filter (₹1 Cr) in analyse() handles the >₹100 Cr market cap screening.
     """
-    # Try 1: NSE index API
+    # Try 1: NSE equity CSV — full ~2200 stock universe (no session required)
+    csv_tickers = _nse_equity_csv()
+    if len(csv_tickers) > 500:
+        return csv_tickers
+
+    # Try 2: NSE index API (~700 curated stocks)
     try:
         session = requests.Session()
         session.headers.update(NSE_HEADERS)
@@ -138,11 +144,6 @@ def get_universe_tickers() -> list[str]:
             return all_t
     except Exception as e:
         print(f"[universe] NSE index API failed: {e}")
-
-    # Try 2: NSE equity CSV (full NSE listing, no session needed)
-    csv_tickers = _nse_equity_csv()
-    if len(csv_tickers) > 500:
-        return csv_tickers
 
     # Try 3: hardcoded fallback
     print("[universe] falling back to hardcoded list")
