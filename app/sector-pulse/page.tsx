@@ -17,6 +17,7 @@ interface Constituent { symbol: string; score?: number; stage?: string; }
 
 interface SectorScore {
   id: string;
+  sector_id: string;
   date: string;
   score: number;
   stage: string;
@@ -329,7 +330,7 @@ export default function SectorPulsePage() {
       // Main scores + sparkline history in parallel
       const [scores, history] = await Promise.all([
         sb(
-          `daily_sector_scores?select=id,date,score,stage,confirmed_stage,stage_entry_date,days_in_current_stage,prev_stage,is_fresh_entry,distance_52w_high,rs_score,rs_vs_midcap,outperf_13w,outperf_26w,atr_ratio,breadth_pct,above_10sma_count,score_delta,vol_trend_pts,top_constituents,sector_definitions(name,slug,stockscans_id)&date=eq.${latest}&order=score.desc`
+          `daily_sector_scores?select=id,sector_id,date,score,stage,confirmed_stage,stage_entry_date,days_in_current_stage,prev_stage,is_fresh_entry,distance_52w_high,rs_score,rs_vs_midcap,outperf_13w,outperf_26w,atr_ratio,breadth_pct,above_10sma_count,score_delta,vol_trend_pts,top_constituents,sector_definitions(name,slug,stockscans_id)&date=eq.${latest}&order=score.desc`
         ),
         sb(
           `daily_sector_scores?select=date,score,sector_id&order=date.desc&limit=400`
@@ -656,7 +657,7 @@ export default function SectorPulsePage() {
                   const dynFresh  = isFreshEntry(row);
                   const hasPending = row.stage !== (row.confirmed_stage || row.stage);
                   const isExit = (displayStage === 'Stage 3 Distribution' || displayStage === 'Stage 4 Downtrend');
-                  const spark = sparklines[row.id] ?? [];
+                  const spark = sparklines[row.sector_id] ?? [];
 
                   return (
                     <tr key={row.id}
