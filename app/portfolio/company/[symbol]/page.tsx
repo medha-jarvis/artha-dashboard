@@ -550,6 +550,87 @@ export default function CompanyPage() {
           </div>
         </div>
 
+        {/* ── Quarterly Earnings Trend ────────────────────────────────────────── */}
+        {pead.length > 0 && (() => {
+          const quarters = [...pead].reverse(); // oldest first
+          const maxRev = Math.max(...quarters.map(p => Math.abs(p.yoy_revenue_pct)), 1);
+          const maxPat = Math.max(...quarters.map(p => Math.abs(p.yoy_profit_pct)), 1);
+          return (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart2 className="w-4 h-4 text-violet-400" />
+                <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Earnings Trend</h2>
+                <span className="text-[10px] text-slate-600">last {quarters.length} quarters · YoY growth %</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Revenue trend */}
+                <div>
+                  <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Revenue Growth (YoY)</div>
+                  <div className="space-y-1.5">
+                    {quarters.map((p, i) => {
+                      const v = p.yoy_revenue_pct;
+                      const pct = Math.min(100, (Math.abs(v) / maxRev) * 100);
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-500 w-16 shrink-0">{p.signal_date.slice(0,7)}</span>
+                          <div className="flex-1 relative h-4 bg-slate-800 rounded-sm overflow-hidden">
+                            <div
+                              className={`absolute inset-y-0 ${v >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${v >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* PAT trend */}
+                <div>
+                  <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Profit Growth (YoY)</div>
+                  <div className="space-y-1.5">
+                    {quarters.map((p, i) => {
+                      const v = p.yoy_profit_pct;
+                      const pct = Math.min(100, (Math.abs(v) / maxPat) * 100);
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-500 w-16 shrink-0">{p.signal_date.slice(0,7)}</span>
+                          <div className="flex-1 relative h-4 bg-slate-800 rounded-sm overflow-hidden">
+                            <div
+                              className={`absolute inset-y-0 ${v >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${v >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              {/* OPM trend */}
+              <div className="mt-3 pt-3 border-t border-slate-800">
+                <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Operating Margin Change (bps)</div>
+                <div className="flex gap-3 flex-wrap">
+                  {quarters.map((p, i) => (
+                    <div key={i} className="flex flex-col items-center gap-1 bg-slate-800/60 rounded-lg px-3 py-2 min-w-[72px]">
+                      <span className="text-[10px] text-slate-500">{p.signal_date.slice(0,7)}</span>
+                      <span className={`text-sm font-bold ${p.opm_expansion_bps >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {p.opm_expansion_bps >= 0 ? '+' : ''}{p.opm_expansion_bps?.toFixed(0) ?? '—'}
+                      </span>
+                      <span className="text-[9px] text-slate-600">bps</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ── Sell Triggers ──────────────────────────────────────────────────────── */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">

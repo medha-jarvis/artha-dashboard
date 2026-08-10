@@ -10,9 +10,15 @@ import {
 } from 'recharts';
 import { RefreshCw, BarChart2, Database, Home, EyeOff, Eye } from 'lucide-react';
 
-type SortColumn = 'stock'|'qty'|'pct'|'invested'|'avgPrice'|'currentPrice'|
-  'value'|'realizedPl'|'pl'|'returns'|'irr'|'duration'|'dayChange'|'dayChangePct'|'signal'|
-  'week52High'|'week52Low'|'pctFrom52H'|'pctFrom52L'|'pe'|'medianPe'|'pb'|'evEbitda'|'divYield'|'roe'|'mcap';
+type SortColumn = 'stock'|'qty'|'pct'|'invested'|
+  'value'|'realizedPl'|'pl'|'returns'|'irr'|'duration'|'dayChange'|'dayChangePct'|
+  'pe'|'signal';
+interface PillarSignal { label: string; color: string; detail: string; }
+interface TickerSignal {
+  technical: PillarSignal; funda: PillarSignal;
+  insider: PillarSignal; events: PillarSignal;
+  signal: 'HOLD'|'WATCH'|'REVIEW'|'EXIT'; signalOrder: number;
+}
 type SortDir  = 'asc'|'desc';
 type CompPeriod = 'inception'|'2020';
 
@@ -83,6 +89,33 @@ const SignalBadge = ({signal}:{signal:string|null}) => {
   const cfg = SIGNAL_CFG[signal]||SIGNAL_CFG.HOLD;
   return <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${cfg.bg} ${cfg.text}`}>{signal.slice(0,5)}</span>;
 };
+
+const COMPUTED_SIG_CFG: Record<string,{bg:string;text:string}> = {
+  HOLD:   {bg:'bg-blue-500/20',   text:'text-blue-400'},
+  WATCH:  {bg:'bg-yellow-500/20', text:'text-yellow-400'},
+  REVIEW: {bg:'bg-orange-500/20', text:'text-orange-400'},
+  EXIT:   {bg:'bg-red-500/20',    text:'text-red-400'},
+};
+
+function PillarCell({ p }: { p: PillarSignal | undefined }) {
+  if (!p) return <td className="text-center px-2 py-2 whitespace-nowrap"><span className="text-slate-700 text-xs">—</span></td>;
+  return (
+    <td className="text-center px-2 py-2 whitespace-nowrap" title={p.detail}>
+      <span className={`text-xs font-semibold cursor-default ${p.color}`}>{p.label}</span>
+    </td>
+  );
+}
+
+function ComputedSignalCell({ sig }: { sig: TickerSignal | undefined }) {
+  if (!sig) return <td className="text-center px-2 py-2 whitespace-nowrap"><span className="text-slate-600 text-xs">—</span></td>;
+  const cfg = COMPUTED_SIG_CFG[sig.signal] ?? COMPUTED_SIG_CFG.HOLD;
+  const detail = `Funda: ${sig.funda.label} · Tech: ${sig.technical.label} · Insider: ${sig.insider.label}`;
+  return (
+    <td className="text-center px-2 py-2 whitespace-nowrap" title={detail}>
+      <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${cfg.bg} ${cfg.text}`}>{sig.signal}</span>
+    </td>
+  );
+}
 
 const SECTOR_COLORS = ['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#ec4899','#14b8a6','#f97316','#06b6d4','#84cc16','#a855f7','#64748b','#22d3ee','#fb923c'];
 const MCAP_COLORS   = {  'Large Cap':'#3b82f6', 'Mid Cap':'#10b981', 'Small Cap':'#f59e0b' };
@@ -239,6 +272,7 @@ export default function PortfolioPage() {
   const [navRange, setNavRange] = useState<'all'|'5yr'|'3yr'|'1yr'>('all');
   const [compPeriod, setCompPeriod] = useState<CompPeriod>('inception');
   const [normalized, setNormalized] = useState(false);
+  const [signals, setSignals] = useState<Record<string, TickerSignal & { signalOrder: number }>>({});
 
   const fetchData = async () => {
     try {
@@ -266,6 +300,10 @@ export default function PortfolioPage() {
   };
 
   useEffect(() => { fetchData(); },[]);
+  useEffect(() => {
+    fetch('/api/portfolio/signals', { cache: 'no-store' })
+      .then(r => r.json()).then(d => { if (d && typeof d === 'object') setSignals(d); }).catch(() => {});
+  }, []);
 
   const normFactor = normalized && summary ? 1e7/summary.totalValue : 1;
   const nfmt = (n:number) => fmtAbs(n*normFactor);
@@ -282,8 +320,6 @@ export default function PortfolioPage() {
       case 'qty':          return d*(a.qty-b.qty);
       case 'pct':          return d*(a.portfolioPct-b.portfolioPct);
       case 'invested':     return d*(a.invested-b.invested);
-      case 'avgPrice':     return d*(a.avgPrice-b.avgPrice);
-      case 'currentPrice': return d*(a.currentPrice-b.currentPrice);
       case 'value':        return d*(a.currentValue-b.currentValue);
       case 'realizedPl':   return d*((a.realizedPnl??0)-(b.realizedPnl??0));
       case 'pl':           return d*(a.totalPnl-b.totalPnl);
@@ -292,18 +328,8 @@ export default function PortfolioPage() {
       case 'duration':     return d*((a.duration??-999)-(b.duration??-999));
       case 'dayChange':    return d*((a.dayChange??-Infinity)-(b.dayChange??-Infinity));
       case 'dayChangePct': return d*((a.dayChangePct??-Infinity)-(b.dayChangePct??-Infinity));
-      case 'signal':       return d*((SIGNAL_ORDER[a.signal??'']??99)-(SIGNAL_ORDER[b.signal??'']??99));
-      case 'week52High':   return d*((a.week52High??-Infinity)-(b.week52High??-Infinity));
-      case 'week52Low':    return d*((a.week52Low??-Infinity)-(b.week52Low??-Infinity));
-      case 'pctFrom52H':   return d*((a.pctFrom52High??-Infinity)-(b.pctFrom52High??-Infinity));
-      case 'pctFrom52L':   return d*((a.pctFrom52Low??-Infinity)-(b.pctFrom52Low??-Infinity));
       case 'pe':           return d*((a.trailingPE??Infinity)-(b.trailingPE??Infinity));
-      case 'medianPe':     return d*((a.medianPE5yr??Infinity)-(b.medianPE5yr??Infinity));
-      case 'pb':           return d*((a.pb??Infinity)-(b.pb??Infinity));
-      case 'evEbitda':     return d*((a.evEbitda??Infinity)-(b.evEbitda??Infinity));
-      case 'divYield':     return d*((a.divYield??-Infinity)-(b.divYield??-Infinity));
-      case 'roe':          return d*((a.roe??-Infinity)-(b.roe??-Infinity));
-      case 'mcap':         return d*((a.marketCapCr??-Infinity)-(b.marketCapCr??-Infinity));
+      case 'signal':       return d*((signals[a.symbol]?.signalOrder??99)-(signals[b.symbol]?.signalOrder??99));
       default: return 0;
     }
   });
@@ -639,7 +665,7 @@ export default function PortfolioPage() {
             <div className="text-xs text-slate-500 hidden sm:block">Click headers to sort</div>
           </div>
           <div className="overflow-x-auto overflow-y-auto -mx-1" style={{maxHeight:'min(680px, calc(100vh - 200px))'}}>
-            <table className="w-full text-xs border-collapse" style={{minWidth:'2100px'}}>
+            <table className="w-full text-xs border-collapse" style={{minWidth:'1560px'}}>
               <thead className="sticky top-0 z-20">
                 <tr className="border-b-2 border-slate-600">
                   <th className="sticky left-0 bg-slate-900 text-left px-2 py-2.5 text-xs font-semibold text-slate-300 cursor-pointer hover:text-white whitespace-nowrap z-30"
@@ -649,8 +675,6 @@ export default function PortfolioPage() {
                   <Th col="qty"          label="Qty"/>
                   <Th col="pct"          label="Port%"/>
                   <Th col="invested"     label="Net Invested"/>
-                  <Th col="avgPrice"     label="Avg ₹"/>
-                  <Th col="currentPrice" label="CMP ₹"/>
                   <Th col="value"        label="Value"/>
                   <Th col="realizedPl"   label="Realized P&L"/>
                   <Th col="pl"           label="Unrealized P&L"/>
@@ -660,20 +684,13 @@ export default function PortfolioPage() {
                   <Th col="duration"     label="Duration"/>
                   <Th col="dayChange"    label="1D ₹"/>
                   <Th col="dayChangePct" label="1D%"/>
-                  {/* 52-week columns */}
-                  <Th col="week52High"   label="52W High"/>
-                  <Th col="week52Low"    label="52W Low"/>
-                  <Th col="pctFrom52H"   label="↓ from High"/>
-                  <Th col="pctFrom52L"   label="↑ from Low"/>
-                  {/* Valuation columns */}
                   <Th col="pe"           label="PE (TTM)"/>
-                  <Th col="medianPe"     label="PE 5yr Median"/>
-                  <Th col="pb"           label="P/B"/>
-                  <Th col="evEbitda"     label="EV/EBITDA"/>
-                  <Th col="roe"          label="ROE%"/>
-                  <Th col="divYield"     label="Div Yield%"/>
-                  <Th col="mcap"         label="MCap (Cr)"/>
-                  <Th col="signal"       label="Action"/>
+                  {/* Signal pillars */}
+                  <Th col="signal" label="Funda" left/>
+                  <Th col="signal" label="Tech"  left/>
+                  <Th col="signal" label="Ins"   left/>
+                  <Th col="signal" label="Events" left/>
+                  <Th col="signal"       label="Signal"/>
                 </tr>
               </thead>
               <tbody>
@@ -688,8 +705,6 @@ export default function PortfolioPage() {
                     <td className="text-right px-2 py-2 text-slate-300 whitespace-nowrap">{h.qty.toLocaleString()}</td>
                     <td className="text-right px-2 py-2 text-slate-400 whitespace-nowrap">{h.portfolioPct.toFixed(1)}%</td>
                     <td className="text-right px-2 py-2 text-slate-300 whitespace-nowrap">{nfmt(h.netInvested??h.invested)}</td>
-                    <td className="text-right px-2 py-2 text-slate-400 whitespace-nowrap">₹{h.avgPrice.toLocaleString()}</td>
-                    <td className="text-right px-2 py-2 text-slate-300 whitespace-nowrap">₹{h.currentPrice.toLocaleString()}</td>
                     <td className="text-right px-2 py-2 text-white font-medium whitespace-nowrap">{nfmt(h.currentValue)}</td>
                     <td className={`text-right px-2 py-2 whitespace-nowrap ${!h.realizedPnl?'text-slate-600':h.realizedPnl>=0?'text-emerald-400':'text-red-400'}`}>
                       {h.realizedPnl ? `${h.realizedPnl>=0?'+':''}${nfmt(h.realizedPnl)}` : '—'}
@@ -716,45 +731,19 @@ export default function PortfolioPage() {
                     <td className={`text-right px-2 py-2 whitespace-nowrap ${h.dayChangePct==null?'text-slate-500':h.dayChangePct>=0?'text-emerald-400':'text-red-400'}`}>
                       {h.dayChangePct!=null?`${h.dayChangePct>=0?'+':''}${h.dayChangePct.toFixed(2)}%`:'—'}
                     </td>
-                    {/* 52-week columns */}
-                    <td className="text-right px-2 py-2 whitespace-nowrap text-slate-300">
-                      {h.week52High!=null ? `₹${h.week52High.toLocaleString('en-IN', {maximumFractionDigits:1})}` : '—'}
-                    </td>
-                    <td className="text-right px-2 py-2 whitespace-nowrap text-slate-300">
-                      {h.week52Low!=null ? `₹${h.week52Low.toLocaleString('en-IN', {maximumFractionDigits:1})}` : '—'}
-                    </td>
-                    <td className={`text-right px-2 py-2 whitespace-nowrap font-medium ${h.pctFrom52High==null?'text-slate-500':h.pctFrom52High>=-5?'text-emerald-400':h.pctFrom52High>=-15?'text-yellow-400':'text-red-400'}`}>
-                      {h.pctFrom52High!=null ? `${h.pctFrom52High.toFixed(1)}%` : '—'}
-                    </td>
-                    <td className={`text-right px-2 py-2 whitespace-nowrap font-medium ${h.pctFrom52Low==null?'text-slate-500':h.pctFrom52Low>=50?'text-emerald-400':h.pctFrom52Low>=20?'text-yellow-400':'text-slate-300'}`}>
-                      {h.pctFrom52Low!=null ? `+${h.pctFrom52Low.toFixed(1)}%` : '—'}
-                    </td>
-                    {/* Valuation columns */}
+                    {/* PE (TTM) */}
                     <td className={`text-right px-2 py-2 whitespace-nowrap ${
                       h.trailingPE==null||h.trailingPE<=0?'text-slate-500':
                       h.medianPE5yr&&h.trailingPE>h.medianPE5yr*1.2?'text-red-400':
                       h.medianPE5yr&&h.trailingPE<h.medianPE5yr*0.8?'text-emerald-400':'text-slate-300'}`}>
                       {fmtPE(h.trailingPE)}
                     </td>
-                    <td className="text-right px-2 py-2 whitespace-nowrap text-slate-400">
-                      {fmtPE(h.medianPE5yr)}
-                    </td>
-                    <td className={`text-right px-2 py-2 whitespace-nowrap ${h.pb==null?'text-slate-500':h.pb>5?'text-amber-400':'text-slate-300'}`}>
-                      {fmtPB(h.pb)}
-                    </td>
-                    <td className="text-right px-2 py-2 whitespace-nowrap text-slate-400">
-                      {h.evEbitda!=null&&h.evEbitda>0 ? fmtNum(h.evEbitda) : '—'}
-                    </td>
-                    <td className={`text-right px-2 py-2 whitespace-nowrap ${h.roe==null?'text-slate-500':h.roe>=20?'text-emerald-400':h.roe>=10?'text-yellow-400':'text-slate-400'}`}>
-                      {h.roe!=null ? `${h.roe.toFixed(1)}%` : '—'}
-                    </td>
-                    <td className={`text-right px-2 py-2 whitespace-nowrap ${h.divYield==null||h.divYield<=0?'text-slate-600':'text-blue-400'}`}>
-                      {h.divYield&&h.divYield>0 ? `${h.divYield.toFixed(2)}%` : '—'}
-                    </td>
-                    <td className="text-right px-2 py-2 whitespace-nowrap text-slate-400">
-                      {h.marketCapCr!=null ? (h.marketCapCr>=10000?`${(h.marketCapCr/1000).toFixed(0)}K`:h.marketCapCr.toFixed(0)) : '—'}
-                    </td>
-                    <td className="text-center px-2 py-2 whitespace-nowrap"><SignalBadge signal={h.signal}/></td>
+                    {/* Signal pillars */}
+                    <PillarCell p={signals[h.symbol]?.funda} />
+                    <PillarCell p={signals[h.symbol]?.technical} />
+                    <PillarCell p={signals[h.symbol]?.insider} />
+                    <PillarCell p={signals[h.symbol]?.events} />
+                    <ComputedSignalCell sig={signals[h.symbol]} />
                   </tr>
                 ))}
                 {/* Closed positions summary row */}
@@ -768,7 +757,7 @@ export default function PortfolioPage() {
                     <td className={`text-right px-2 py-2 whitespace-nowrap text-xs font-medium ${(summary.closedPositions.netInvested??0)<=0?'text-emerald-400':'text-slate-400'}`}>
                       {nfmt(summary.closedPositions.netInvested)}
                     </td>
-                    <td/><td/><td/>
+                    <td/>
                     <td className={`text-right px-2 py-2 whitespace-nowrap font-semibold ${summary.closedPositions.realizedPnl>=0?'text-emerald-400':'text-red-400'}`}>
                       {summary.closedPositions.realizedPnl>=0?'+':''}{nfmt(summary.closedPositions.realizedPnl)}
                     </td>
@@ -779,7 +768,7 @@ export default function PortfolioPage() {
                     <td className={`text-right px-2 py-2 text-xs whitespace-nowrap ${summary.closedPositions.realizedPnl>=0?'text-emerald-400':'text-red-400'}`}>
                       {pct(summary.closedPositions.grossInvested>0?summary.closedPositions.realizedPnl/summary.closedPositions.grossInvested*100:null)}
                     </td>
-                    <td/><td/><td/><td/><td/><td/><td/><td/><td/><td/><td/><td/><td/><td/>
+                    <td/><td/><td/><td/><td/><td/><td/><td/><td/><td/>
                   </tr>
                 )}
               </tbody>
@@ -788,7 +777,6 @@ export default function PortfolioPage() {
                   <td className="sticky left-0 bg-slate-800 px-2 py-2 text-white whitespace-nowrap z-10">TOTAL ({holdings.length})</td>
                   <td/><td/>
                   <td className="text-right px-2 py-2 text-white whitespace-nowrap">{summary?nfmt(summary.totalNetInvested??summary.totalInvested):''}</td>
-                  <td/><td/>
                   <td className="text-right px-2 py-2 text-emerald-400 whitespace-nowrap">{summary?nfmt(summary.totalValue):''}</td>
                   <td className={`text-right px-2 py-2 whitespace-nowrap ${(summary?.totalRealizedPnl??0)>=0?'text-emerald-400':'text-red-400'}`}>
                     {summary?`${(summary.totalRealizedPnl??0)>=0?'+':''}${nfmt(summary.totalRealizedPnl??0)}`:''}
@@ -810,13 +798,13 @@ export default function PortfolioPage() {
                   <td className={`text-right px-2 py-2 whitespace-nowrap ${(summary?.totalDayChangePct??0)>=0?'text-emerald-400':'text-red-400'}`}>
                     {summary?.totalDayChangePct!=null?`${summary.totalDayChangePct>=0?'+':''}${summary.totalDayChangePct.toFixed(2)}%`:'—'}
                   </td>
-                  <td/><td/><td/><td/><td/><td/><td/><td/><td/><td/><td/>
+                  <td/><td/><td/><td/><td/><td/>
                 </tr>
               </tfoot>
             </table>
           </div>
           <div className="mt-1.5 text-xs text-slate-600 text-right">
-            † Return% = true total return incl. realized gains · IRR = annualised · PE colored red if &gt;20% above 5yr median · ↓ from High: green if within 5%, red if &gt;15% below
+            † Return% = true total return incl. realized gains · IRR = annualised · PE red if &gt;20% above 5yr median · Click stock name for deep dive
             {normalized?' · Normalised to ₹1Cr':''}
           </div>
         </div>

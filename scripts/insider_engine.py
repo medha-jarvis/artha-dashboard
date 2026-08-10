@@ -55,13 +55,22 @@ def get_nse_session() -> requests.Session:
     return session
 
 
-def fetch_pit_today(session: requests.Session) -> list[dict]:
-    """Fetch today's PIT batch. Requires Indian IP — must run from VPS."""
+def fetch_pit_recent(session: requests.Session, days: int = 90) -> list[dict]:
+    """Fetch PIT records for the past `days` days.
+    NSE publishes insider data with ~60-90 day lag so we use a rolling window.
+    Requires Indian IP — must run from VPS."""
+    to_dt   = date.today()
+    from_dt = to_dt - timedelta(days=days)
+    fd = from_dt.strftime("%d-%m-%Y")
+    td = to_dt.strftime("%d-%m-%Y")
     try:
-        r = session.get("https://www.nseindia.com/api/corporates-pit?index=equities", timeout=20)
+        r = session.get(
+            f"https://www.nseindia.com/api/corporates-pit?index=equities&from_date={fd}&to_date={td}",
+            timeout=20,
+        )
         data = r.json()
         records = data if isinstance(data, list) else data.get("data", data.get("result", []))
-        print(f"[nse] fetched {len(records)} PIT records")
+        print(f"[nse] fetched {len(records)} PIT records ({fd} → {td})")
         return records
     except Exception as e:
         print(f"[nse] PIT fetch failed: {e}")
@@ -265,14 +274,28 @@ def send_telegram(alerts: list[dict]) -> None:
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
+def get_latest_db_date() -> str:
+    """Return the latest signal_date already stored, so we only alert on new data."""
+    try:
+        resp = sb.table("insider_signals").select("signal_date").order("signal_date", desc=True).limit(1).execute()
+        return (resp.data or [{}])[0].get("signal_date", "2000-01-01")
+    except Exception:
+        return "2000-01-01"
+
+
 def main():
     print(f"=== Insider Engine v2 — {TODAY} ===")
     session = get_nse_session()
-    records = fetch_pit_today(session)
+    # NSE PIT has ~60-90 day lag; use 150-day window to reliably capture latest available data
+    records = fetch_pit_recent(session, days=150)
 
     if not records:
-        print("[main] no PIT data — is this running from Indian IP (VPS)?")
+        print("[main] no PIT data — check Indian IP (VPS) and NSE availability")
         return
+
+    # Only send Telegram for trades newer than what we already have in DB
+    last_known_date = get_latest_db_date()
+    print(f"[main] last known date in DB: {last_known_date}")
 
     parsed = [p for rec in records if (p := parse_record(rec)) and p["ticker"]]
     print(f"[filter] {len(parsed)} qualifying trades (≥₹50L, promoter/director, market)")
@@ -280,7 +303,7 @@ def main():
     alerts, processed = [], 0
     for p in parsed:
         ticker = p["ticker"]
-        print(f"  {ticker} | {p['acquirer_name'][:28]} | {p['transaction_type']} | ₹{p['trade_cr']:.1f}Cr", end="  ")
+        print(f"  {ticker} | {p['acquirer_name'][:28]} | {p['transaction_type']} | ₹{p['trade_value_cr']:.1f}Cr", end="  ")
 
         tech = get_technicals(ticker)
         past = get_past_returns(p["acquirer_name"], ticker)
@@ -290,7 +313,7 @@ def main():
             equity_pct = round(p["secs_traded"] / tech["shares_out"] * 100, 4)
 
         cred, cred_reason = score_credibility(past, p["transaction_type"])
-        score = compute_score(p["trade_cr"], equity_pct, cred, tech["ema150_dist"], p["transaction_type"])
+        score = compute_score(p["trade_value_cr"], equity_pct, cred, tech["ema150_dist"], p["transaction_type"])
         tier  = tier_from_score(score)
         print(f"→ score={score} cred={cred}/60 tier={tier}")
 
@@ -305,7 +328,7 @@ def main():
             "transaction_type":    p["transaction_type"],
             "signal_date":         p["signal_date"],
             "insider_score":       score,
-            "trade_value_in_cr":   p["trade_cr"],
+            "trade_value_in_cr":   p["trade_value_cr"],
             "equity_pct_traded":   equity_pct,
             "ema150_distance_pct": tech["ema150_dist"],
             "cluster_trade_flag":  cluster,
@@ -323,9 +346,10 @@ def main():
             print(f"    [db] {e}")
             continue
 
-        if score >= 75:
+        # Only alert for signals newer than what was already in DB before this run
+        if score >= 75 and p["signal_date"] > last_known_date:
             alerts.append({"ticker": ticker, "tx": p["transaction_type"],
-                           "acquirer": p["acquirer_name"], "val": p["trade_cr"],
+                           "acquirer": p["acquirer_name"], "val": p["trade_value_cr"],
                            "score": score, "tier": tier})
 
     print(f"\n[done] {processed} signals stored | {len(alerts)} HIGH CONVICTION alerts")
