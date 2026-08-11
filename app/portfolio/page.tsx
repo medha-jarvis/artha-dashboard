@@ -308,14 +308,14 @@ export default function PortfolioPage() {
       .then(r => r.json()).then(d => { if (d && typeof d === 'object') setSignals(d); }).catch(() => {});
   }, []);
 
-  // Poll fundamentals status while running
+  // Poll portfolio signals status while running
   useEffect(() => {
     if (!fundaRunning) return;
     const iv = setInterval(() => {
-      fetch('/api/sell-signal-trigger').then(r => r.json()).then(d => {
+      fetch('/api/portfolio-signals-trigger').then(r => r.json()).then(d => {
         if (!d.running) {
           setFundaRunning(false);
-          setEngineStatus(s => ({ ...s, fundamentals: 'done' }));
+          setEngineStatus(s => ({ ...s, portfolio: 'done', fundamentals: 'done' }));
           fetch('/api/portfolio/signals', { cache: 'no-store' })
             .then(r => r.json()).then(d => { if (d && typeof d === 'object') setSignals(d); }).catch(() => {});
           clearInterval(iv);
@@ -344,16 +344,16 @@ export default function PortfolioPage() {
   }
 
   async function triggerAll() {
-    setEngineStatus({ stage2: 'running', pead: 'running', insider: 'running', fundamentals: 'running' });
+    setEngineStatus({ portfolio: 'running', pead: 'running', insider: 'running', fundamentals: 'running' });
     try {
       const r = await fetch('/api/refresh-all-signals', { method: 'POST' });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
       setFundaRunning(true);
-      setTimeout(() => setEngineStatus(s => ({ ...s, stage2: 'done', pead: 'done', insider: 'done' })), 3000);
-      setTimeout(() => setEngineStatus(s => ({ ...s, stage2: 'idle', pead: 'idle', insider: 'idle' })), 7000);
+      setTimeout(() => setEngineStatus(s => ({ ...s, pead: 'done', insider: 'done' })), 3000);
+      setTimeout(() => setEngineStatus(s => ({ ...s, pead: 'idle', insider: 'idle' })), 7000);
     } catch {
-      setEngineStatus({ stage2: 'error', pead: 'error', insider: 'error', fundamentals: 'error' });
+      setEngineStatus({ portfolio: 'error', pead: 'error', insider: 'error', fundamentals: 'error' });
       setTimeout(() => setEngineStatus({}), 5000);
     }
   }
@@ -714,10 +714,10 @@ export default function PortfolioPage() {
         {/* ── Signal Engines Control Panel ── */}
         {(() => {
           const engines = [
-            { key: 'stage2',       label: 'Stage 2',     sub: 'Technical stage',   url: '/api/stage2-trigger',        icon: '📊' },
-            { key: 'pead',         label: 'PEAD',         sub: 'Earnings quality',  url: '/api/pead-trigger',           icon: '💰' },
-            { key: 'insider',      label: 'Insider',      sub: 'Promoter / FII',    url: '/api/insider-trigger',        icon: '👤' },
-            { key: 'fundamentals', label: 'Fundamentals', sub: 'Screener.in ~5 min',url: '/api/sell-signal-trigger',    icon: '📋' },
+            { key: 'portfolio',    label: 'All Signals',  sub: 'Tech + Funda + Ins · ~3 min', url: '/api/portfolio-signals-trigger', icon: '⚡' },
+            { key: 'pead',         label: 'PEAD',         sub: 'Latest earnings quality',  url: '/api/pead-trigger',           icon: '💰' },
+            { key: 'insider',      label: 'Insider',      sub: 'Promoter / FII (90d)',    url: '/api/insider-trigger',        icon: '👤' },
+            { key: 'fundamentals', label: 'Screener',     sub: 'Quarterly P&L ~5 min',    url: '/api/sell-signal-trigger',    icon: '📋' },
           ];
           const getBtnStyle = (st: string) =>
             st === 'running' ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse' :
@@ -787,7 +787,7 @@ export default function PortfolioPage() {
                   {fundaRunning && (
                     <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2">
                       <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0"/>
-                      <span className="text-xs text-blue-300">Fundamentals scraper running on VPS — polling Screener.in for all 32 stocks (~5 min). Signal table auto-refreshes when done.</span>
+                      <span className="text-xs text-blue-300">Portfolio signal tracker running on VPS (~3 min for 32 stocks). Signal columns auto-refresh when done.</span>
                     </div>
                   )}
                 </div>

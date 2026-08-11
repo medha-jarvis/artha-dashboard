@@ -16,137 +16,44 @@ async function sbFetch(table: string, params: string): Promise<unknown[]> {
   } catch { return []; }
 }
 
-interface Stage2Row {
-  ticker: string; lifecycle_state: string; stage2_score: number;
-  stage2_subtype: string; rs_52w_percentile: number; score_trend: string;
-  ema150_distance_pct: number;
-}
-interface PeadRow {
-  ticker: string; signal_date: string; yoy_profit_pct: number;
-  yoy_revenue_pct: number; opm_expansion_bps: number; trigger_path: string;
-}
-interface InsiderRow {
-  ticker: string; transaction_type: string; trade_value_in_cr: number;
-  equity_pct_traded: number; cluster_trade_flag: boolean; tier: string; signal_date: string;
-}
-interface WatchlistRow { ticker: string; last_doc_date: string | null; }
-
 export interface PillarSignal { label: string; color: string; detail: string; }
 export interface TickerSignal {
-  technical: PillarSignal;
-  funda:     PillarSignal;
-  insider:   PillarSignal;
-  events:    PillarSignal;
-  signal:    'HOLD' | 'WATCH' | 'REVIEW' | 'EXIT';
+  technical: PillarSignal; funda: PillarSignal;
+  insider: PillarSignal; events: PillarSignal;
+  signal: 'HOLD' | 'WATCH' | 'REVIEW' | 'EXIT'; signalOrder: number;
 }
 
-function getTechSignal(s2: Stage2Row | null): PillarSignal {
-  if (!s2) return { label: '—', color: 'text-slate-600', detail: 'No stage data yet' };
-  const { lifecycle_state: lc, stage2_score: score, rs_52w_percentile: rs, stage2_subtype: sub } = s2;
-  if (lc === 'EXITED')    return { label: 'Brk ⚠', color: 'text-red-400',    detail: `Stage 2 EXITED — below EMA150. Score: ${score}/100` };
-  if (lc === 'WEAKENING') return { label: 'Wkn ⚠', color: 'text-orange-400', detail: `Stage 2 WEAKENING. Score: ${score}/100 · RS: ${rs}th pct` };
-  if (score >= 80) return { label: '2A ●', color: 'text-emerald-300', detail: `Stage 2A Early Inflection · ${score}/100 · RS ${rs}th pct · ${sub}` };
-  if (score >= 65) return { label: '2B ●', color: 'text-teal-400',    detail: `Stage 2B Sustained · ${score}/100 · RS ${rs}th pct · ${sub}` };
-  if (score >= 50) return { label: 'Stg1',  color: 'text-yellow-400',  detail: `Stage 1 Consolidation · ${score}/100 · RS ${rs}th pct` };
-  return              { label: 'Weak',  color: 'text-red-500',    detail: `Weak / Avoid zone · ${score}/100 · RS ${rs}th pct` };
+interface PortfolioSignalRow {
+  ticker: string;
+  tech_label: string; tech_color: string; tech_detail: string;
+  funda_label: string; funda_color: string; funda_detail: string;
+  insider_label: string; insider_color: string; insider_detail: string;
+  events_label: string; events_color: string; events_detail: string;
+  signal: string; signal_order: number;
+  weekly_score: number; above_40w_sma: boolean; rs_pct: number | null; rsi_weekly: number | null;
+  updated_at: string;
 }
-
-function getFundaSignal(peads: PeadRow[]): PillarSignal {
-  if (!peads.length) return { label: '—', color: 'text-slate-600', detail: 'No earnings data yet' };
-  const l = peads[0], p = peads[1] ?? null;
-  const revYoY = l.yoy_revenue_pct, patYoY = l.yoy_profit_pct, opm = l.opm_expansion_bps;
-  const revAccel = p ? revYoY > p.yoy_revenue_pct : null;
-  const patAccel = p ? patYoY > p.yoy_profit_pct  : null;
-  const detail = `Rev ${revYoY >= 0 ? '+' : ''}${revYoY.toFixed(0)}% YoY · PAT ${patYoY >= 0 ? '+' : ''}${patYoY.toFixed(0)}% YoY · OPM ${opm >= 0 ? '+' : ''}${opm.toFixed(0)}bps`;
-
-  if (patYoY < 0 && revYoY < 0 && p && p.yoy_profit_pct < 0 && p.yoy_revenue_pct < 0)
-    return { label: '↓↓', color: 'text-red-400', detail: '2+ qtrs both declining · ' + detail };
-  if (patYoY < -20)
-    return { label: '↓ PAT', color: 'text-red-400', detail };
-  if (patYoY < 0)
-    return { label: '↓ PAT', color: 'text-amber-400', detail };
-  if (patAccel === true && revAccel === true && opm > 0)
-    return { label: '↑ All', color: 'text-emerald-400', detail: 'Accelerating growth + margin expansion · ' + detail };
-  if (patYoY > 0 && revYoY > 0)
-    return { label: '↑ Rev', color: 'text-teal-400', detail };
-  return { label: '→', color: 'text-slate-400', detail };
-}
-
-function getInsiderSignal(ins: InsiderRow[]): PillarSignal {
-  if (!ins.length) return { label: '→', color: 'text-slate-500', detail: 'No insider activity (90d)' };
-  const buys  = ins.filter(i => i.transaction_type === 'BUY');
-  const sells = ins.filter(i => i.transaction_type === 'SELL');
-  const bv = buys.reduce((s, i)  => s + i.trade_value_in_cr, 0);
-  const sv = sells.reduce((s, i) => s + i.trade_value_in_cr, 0);
-  const clusterSell = sells.find(i => i.cluster_trade_flag);
-  const hcSell      = sells.find(i => i.tier === 'HIGH CONVICTION');
-  const detail = `${buys.length > 0 ? `↑ ₹${bv.toFixed(0)}Cr bought` : ''}${buys.length > 0 && sells.length > 0 ? ' · ' : ''}${sells.length > 0 ? `↓ ₹${sv.toFixed(0)}Cr sold` : ''} (90d)`;
-
-  if (clusterSell && hcSell) return { label: '⚠ Sell', color: 'text-red-400',    detail: 'Cluster HC selling · ' + detail };
-  if (hcSell || clusterSell) return { label: '↓ Sell', color: 'text-orange-400', detail };
-  if (sells.length > 0 && sv > bv) return { label: '↓ Sell', color: 'text-amber-400', detail };
-  if (buys.length > 0 && bv > 0)   return { label: '↑ Buy',  color: 'text-emerald-400', detail };
-  return { label: '→', color: 'text-slate-500', detail };
-}
-
-function getEventsSignal(wl: WatchlistRow | null): PillarSignal {
-  if (!wl?.last_doc_date) return { label: '—', color: 'text-slate-600', detail: 'No NSE filings indexed' };
-  const days = Math.floor((Date.now() - new Date(wl.last_doc_date).getTime()) / 86400000);
-  if (days > 120) return { label: '⚠ Stale', color: 'text-amber-400', detail: `Last NSE filing ${days}d ago — results may be missing` };
-  if (days > 60)  return { label: `${days}d`,  color: 'text-yellow-500', detail: `Last NSE filing ${days} days ago (${wl.last_doc_date})` };
-  return              { label: `${days}d`,  color: 'text-slate-400',  detail: `Last NSE filing ${days} days ago (${wl.last_doc_date})` };
-}
-
-function computeSignal(
-  tech: PillarSignal, funda: PillarSignal, insider: PillarSignal
-): TickerSignal['signal'] {
-  const techExit   = tech.label === 'Brk ⚠' || tech.label === 'Weak';
-  const techWeak   = tech.label === 'Wkn ⚠' || tech.label === 'Stg1';
-  const fundaRed   = funda.label === '↓↓' || (funda.label === '↓ PAT' && funda.color === 'text-red-400');
-  const fundaAmb   = funda.label === '↓ PAT' && funda.color === 'text-amber-400';
-  const insiderSell = insider.label === '⚠ Sell' || insider.label === '↓ Sell';
-
-  if (techExit && fundaRed) return 'EXIT';
-  if (techExit || (fundaRed && insiderSell)) return 'REVIEW';
-  if (techWeak || fundaAmb || insiderSell) return 'WATCH';
-  return 'HOLD';
-}
-
-const SIGNAL_SORT: Record<string, number> = { EXIT: 0, REVIEW: 1, WATCH: 2, HOLD: 3 };
 
 export async function GET() {
-  const ago90 = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+  // Primary source: portfolio_signals (computed by portfolio_signal_tracker.py for ALL portfolio stocks)
+  const rows = await sbFetch('portfolio_signals',
+    'select=ticker,tech_label,tech_color,tech_detail,funda_label,funda_color,funda_detail,insider_label,insider_color,insider_detail,events_label,events_color,events_detail,signal,signal_order,weekly_score,above_40w_sma,rs_pct,rsi_weekly,updated_at'
+  ) as PortfolioSignalRow[];
 
-  const [s2All, peadAll, insiderAll, watchlistAll] = await Promise.all([
-    sbFetch('stage2_signals',
-      'select=ticker,lifecycle_state,stage2_score,stage2_subtype,rs_52w_percentile,score_trend,ema150_distance_pct&order=signal_date.desc&limit=600'),
-    sbFetch('pead_signals',
-      'select=ticker,signal_date,yoy_profit_pct,yoy_revenue_pct,opm_expansion_bps,trigger_path&order=signal_date.desc&limit=300'),
-    sbFetch('insider_signals',
-      `select=ticker,transaction_type,trade_value_in_cr,equity_pct_traded,cluster_trade_flag,tier,signal_date&signal_date=gte.${ago90}&order=signal_date.desc&limit=500`),
-    sbFetch('alpha_watchlist', 'select=ticker,last_doc_date'),
-  ]);
+  const result: Record<string, TickerSignal & { signalOrder: number; score?: number; updatedAt?: string }> = {};
 
-  const s2Map:  Record<string, Stage2Row>     = {};
-  const peadMap:Record<string, PeadRow[]>     = {};
-  const insMap: Record<string, InsiderRow[]>  = {};
-  const wlMap:  Record<string, WatchlistRow>  = {};
-
-  for (const r of s2All as Stage2Row[])      { if (!s2Map[r.ticker])   s2Map[r.ticker] = r; }
-  for (const r of peadAll as PeadRow[])      { if (!peadMap[r.ticker]) peadMap[r.ticker] = []; if (peadMap[r.ticker].length < 2) peadMap[r.ticker].push(r); }
-  for (const r of insiderAll as InsiderRow[]) { if (!insMap[r.ticker])  insMap[r.ticker] = [];  insMap[r.ticker].push(r); }
-  for (const r of watchlistAll as WatchlistRow[]) { wlMap[r.ticker] = r; }
-
-  const allTickers = new Set([...Object.keys(s2Map), ...Object.keys(peadMap), ...Object.keys(insMap), ...Object.keys(wlMap)]);
-
-  const result: Record<string, TickerSignal & { signalOrder: number }> = {};
-  for (const ticker of allTickers) {
-    const technical = getTechSignal(s2Map[ticker] ?? null);
-    const funda     = getFundaSignal(peadMap[ticker] ?? []);
-    const insider   = getInsiderSignal(insMap[ticker] ?? []);
-    const events    = getEventsSignal(wlMap[ticker] ?? null);
-    const signal    = computeSignal(technical, funda, insider);
-    result[ticker]  = { technical, funda, insider, events, signal, signalOrder: SIGNAL_SORT[signal] ?? 99 };
+  for (const r of rows) {
+    if (!r.ticker || !r.signal) continue;
+    result[r.ticker] = {
+      technical: { label: r.tech_label    || '—', color: r.tech_color    || 'text-slate-600', detail: r.tech_detail    || '' },
+      funda:     { label: r.funda_label   || '—', color: r.funda_color   || 'text-slate-600', detail: r.funda_detail   || '' },
+      insider:   { label: r.insider_label || '→', color: r.insider_color || 'text-slate-500', detail: r.insider_detail || '' },
+      events:    { label: r.events_label  || '—', color: r.events_color  || 'text-slate-600', detail: r.events_detail  || '' },
+      signal:    (r.signal as TickerSignal['signal']) || 'HOLD',
+      signalOrder: r.signal_order ?? 3,
+      score: r.weekly_score,
+      updatedAt: r.updated_at,
+    };
   }
 
   return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });
