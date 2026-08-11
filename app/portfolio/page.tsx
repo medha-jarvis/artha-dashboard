@@ -8,7 +8,7 @@ import {
   ResponsiveContainer, ReferenceLine, PieChart, Pie,
   ScatterChart, Scatter, LabelList, Treemap,
 } from 'recharts';
-import { RefreshCw, BarChart2, Database, Home, EyeOff, Eye } from 'lucide-react';
+import { RefreshCw, BarChart2, Database, Home, EyeOff, Eye, Zap, ChevronDown, ChevronUp, Play } from 'lucide-react';
 
 type SortColumn = 'stock'|'qty'|'pct'|'invested'|
   'value'|'realizedPl'|'pl'|'returns'|'irr'|'duration'|'dayChange'|'dayChangePct'|
@@ -273,6 +273,9 @@ export default function PortfolioPage() {
   const [compPeriod, setCompPeriod] = useState<CompPeriod>('inception');
   const [normalized, setNormalized] = useState(false);
   const [signals, setSignals] = useState<Record<string, TickerSignal & { signalOrder: number }>>({});
+  const [enginesOpen,   setEnginesOpen]   = useState(false);
+  const [engineStatus,  setEngineStatus]  = useState<Record<string,string>>({});  // idle|running|done|error
+  const [fundaRunning,  setFundaRunning]  = useState(false);
 
   const fetchData = async () => {
     try {
@@ -304,6 +307,56 @@ export default function PortfolioPage() {
     fetch('/api/portfolio/signals', { cache: 'no-store' })
       .then(r => r.json()).then(d => { if (d && typeof d === 'object') setSignals(d); }).catch(() => {});
   }, []);
+
+  // Poll fundamentals status while running
+  useEffect(() => {
+    if (!fundaRunning) return;
+    const iv = setInterval(() => {
+      fetch('/api/sell-signal-trigger').then(r => r.json()).then(d => {
+        if (!d.running) {
+          setFundaRunning(false);
+          setEngineStatus(s => ({ ...s, fundamentals: 'done' }));
+          fetch('/api/portfolio/signals', { cache: 'no-store' })
+            .then(r => r.json()).then(d => { if (d && typeof d === 'object') setSignals(d); }).catch(() => {});
+          clearInterval(iv);
+        }
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [fundaRunning]);
+
+  async function triggerEngine(name: string, url: string, body: object = {}) {
+    setEngineStatus(s => ({ ...s, [name]: 'running' }));
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'failed');
+      if (name === 'fundamentals') {
+        setFundaRunning(true);
+      } else {
+        setEngineStatus(s => ({ ...s, [name]: 'done' }));
+        setTimeout(() => setEngineStatus(s => ({ ...s, [name]: 'idle' })), 4000);
+      }
+    } catch (e) {
+      setEngineStatus(s => ({ ...s, [name]: 'error' }));
+      setTimeout(() => setEngineStatus(s => ({ ...s, [name]: 'idle' })), 5000);
+    }
+  }
+
+  async function triggerAll() {
+    setEngineStatus({ stage2: 'running', pead: 'running', insider: 'running', fundamentals: 'running' });
+    try {
+      const r = await fetch('/api/refresh-all-signals', { method: 'POST' });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+      setFundaRunning(true);
+      setTimeout(() => setEngineStatus(s => ({ ...s, stage2: 'done', pead: 'done', insider: 'done' })), 3000);
+      setTimeout(() => setEngineStatus(s => ({ ...s, stage2: 'idle', pead: 'idle', insider: 'idle' })), 7000);
+    } catch {
+      setEngineStatus({ stage2: 'error', pead: 'error', insider: 'error', fundamentals: 'error' });
+      setTimeout(() => setEngineStatus({}), 5000);
+    }
+  }
 
   const normFactor = normalized && summary ? 1e7/summary.totalValue : 1;
   const nfmt = (n:number) => fmtAbs(n*normFactor);
@@ -658,11 +711,96 @@ export default function PortfolioPage() {
           </div>
         )}
 
+        {/* ── Signal Engines Control Panel ── */}
+        {(() => {
+          const engines = [
+            { key: 'stage2',       label: 'Stage 2',     sub: 'Technical stage',   url: '/api/stage2-trigger',        icon: '📊' },
+            { key: 'pead',         label: 'PEAD',         sub: 'Earnings quality',  url: '/api/pead-trigger',           icon: '💰' },
+            { key: 'insider',      label: 'Insider',      sub: 'Promoter / FII',    url: '/api/insider-trigger',        icon: '👤' },
+            { key: 'fundamentals', label: 'Fundamentals', sub: 'Screener.in ~5 min',url: '/api/sell-signal-trigger',    icon: '📋' },
+          ];
+          const getBtnStyle = (st: string) =>
+            st === 'running' ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse' :
+            st === 'done'    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
+            st === 'error'   ? 'bg-red-500/20 text-red-300 border-red-500/40' :
+                               'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500 hover:text-slate-200';
+          return (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/40 transition-colors"
+                onClick={() => setEnginesOpen(o => !o)}
+              >
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <span className="text-sm font-semibold text-slate-200">Signal Engines</span>
+                  <span className="text-[10px] text-slate-500">Run manually to refresh signal data</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {Object.values(engineStatus).some(s => s === 'running') && (
+                    <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full animate-pulse">Running…</span>
+                  )}
+                  {enginesOpen ? <ChevronUp className="w-4 h-4 text-slate-500"/> : <ChevronDown className="w-4 h-4 text-slate-500"/>}
+                </div>
+              </button>
+
+              {enginesOpen && (
+                <div className="border-t border-slate-800 px-4 py-3 space-y-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {engines.map(e => {
+                      const st = engineStatus[e.key] || 'idle';
+                      return (
+                        <button
+                          key={e.key}
+                          onClick={() => st !== 'running' && triggerEngine(e.key, e.url)}
+                          disabled={st === 'running'}
+                          className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all ${getBtnStyle(st)}`}
+                        >
+                          <span className="text-base shrink-0">{e.icon}</span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold flex items-center gap-1">
+                              {e.label}
+                              {st === 'running' && <RefreshCw className="w-3 h-3 animate-spin"/>}
+                              {st === 'done'    && <span className="text-[10px]">✓</span>}
+                              {st === 'error'   && <span className="text-[10px]">✗</span>}
+                            </div>
+                            <div className="text-[10px] opacity-60 truncate">
+                              {st === 'running' ? 'Running…' : st === 'done' ? 'Started ✓' : st === 'error' ? 'Error — retry' : e.sub}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-3 pt-1 border-t border-slate-800/60">
+                    <button
+                      onClick={() => !Object.values(engineStatus).some(s=>s==='running') && triggerAll()}
+                      disabled={Object.values(engineStatus).some(s => s === 'running')}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 transition-colors text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Play className="w-3.5 h-3.5"/>
+                      Refresh All Signals
+                    </button>
+                    <span className="text-[10px] text-slate-600">Launches all 4 engines in background · fundamentals takes ~5 min</span>
+                  </div>
+
+                  {fundaRunning && (
+                    <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2">
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0"/>
+                      <span className="text-xs text-blue-300">Fundamentals scraper running on VPS — polling Screener.in for all 32 stocks (~5 min). Signal table auto-refreshes when done.</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ── Holdings Table ── */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-base font-bold text-white">Holdings — Stock-wise IRR &amp; Valuation</h2>
-            <div className="text-xs text-slate-500 hidden sm:block">Click headers to sort</div>
+            <h2 className="text-base font-bold text-white">Holdings</h2>
+            <div className="text-xs text-slate-500 hidden sm:block">Click headers to sort · Click stock name for deep dive</div>
           </div>
           <div className="overflow-x-auto overflow-y-auto -mx-1" style={{maxHeight:'min(680px, calc(100vh - 200px))'}}>
             <table className="w-full text-xs border-collapse" style={{minWidth:'1560px'}}>
