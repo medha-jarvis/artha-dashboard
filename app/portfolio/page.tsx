@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import { InfoTooltip } from '../components/InfoTooltip';
 import {
   LineChart, Line, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -72,6 +73,15 @@ const fmtPE    = (v:number|null|undefined) => v!=null && v > 0 && v < 500 ? v.to
 const fmtPB    = (v:number|null|undefined) => v!=null && v > 0 ? v.toFixed(2) : '—';
 const fmtNum   = (v:number|null|undefined, dec=1) => v!=null ? v.toFixed(dec) : '—';
 
+const COL_TIPS: Record<string, string> = {
+  pe:     'PE (TTM) — Trailing 12-month Price-to-Earnings. Coloured red if >20% above 5yr median (historically expensive), green if >20% below (cheap vs own history).',
+  funda:  'Fundamental Signal — quality of the latest quarterly results. Looks at revenue growth, operating margin expansion, ROE, debt levels, and cash flows. Scored by our Screener engine.',
+  tech:   'Technical Signal — Stage 2 lifecycle state. Checks if the stock is in a confirmed price uptrend (above rising EMA150, high RS rank, constructive volume). Powered by the Stage 2 engine.',
+  ins:    'Insider Signal — net promoter / management buy vs sell activity in last 90 days. Scored by trade size (% of equity), cluster activity (multiple insiders), and conviction tier.',
+  events: 'Events / Earnings Signal — PEAD score (Post-Earnings Announcement Drift). Measures earnings surprise quality: YoY profit growth, margin expansion, volume surge on results day.',
+  signal: 'Composite Signal — combines all 4 pillars (Funda + Tech + Insider + Events). HOLD = thesis intact. WATCH = early deterioration. REVIEW = multiple red flags. EXIT = sell triggers fired.',
+};
+
 const SIGNAL_CFG:Record<string,{bg:string;text:string}> = {
   BUY:       {bg:'bg-emerald-500/25',text:'text-emerald-300'},
   ACCUMULATE:{bg:'bg-teal-500/25',   text:'text-teal-300'},
@@ -98,10 +108,13 @@ const COMPUTED_SIG_CFG: Record<string,{bg:string;text:string}> = {
 };
 
 function PillarCell({ p }: { p: PillarSignal | undefined }) {
-  if (!p) return <td className="text-center px-2 py-2 whitespace-nowrap"><span className="text-slate-700 text-xs">—</span></td>;
+  if (!p) return <td className="text-center px-2 py-2 whitespace-nowrap"><span className="text-slate-600 text-xs">—</span></td>;
   return (
-    <td className="text-center px-2 py-2 whitespace-nowrap" title={p.detail}>
-      <span className={`text-xs font-semibold cursor-default ${p.color}`}>{p.label}</span>
+    <td className="text-center px-2 py-2 whitespace-nowrap">
+      <span className={`inline-flex items-center gap-0.5 text-xs font-semibold ${p.color}`}>
+        {p.label}
+        <InfoTooltip content={p.detail} title={p.label} position="bottom" />
+      </span>
     </td>
   );
 }
@@ -423,10 +436,13 @@ export default function PortfolioPage() {
 
   const xInt = navRange==='1yr'?1:navRange==='3yr'?5:11;
 
-  const Th = ({col,label,left}:{col:SortColumn;label:string;left?:boolean}) => (
+  const Th = ({col,label,left,tip}:{col:SortColumn;label:string;left?:boolean;tip?:string}) => (
     <th className={`${left?'text-left':'text-right'} px-2 py-2 text-xs font-medium text-slate-400 cursor-pointer hover:text-white whitespace-nowrap select-none bg-slate-900`}
       onClick={()=>handleSort(col)}>
-      {label}{sortCol===col?(sortDir==='asc'?' ▲':' ▼'):''}
+      <span className="inline-flex items-center gap-0.5">
+        {label}{sortCol===col?(sortDir==='asc'?' ▲':' ▼'):''}
+        {tip && <InfoTooltip content={tip} position="bottom" />}
+      </span>
     </th>
   );
 
@@ -822,13 +838,13 @@ export default function PortfolioPage() {
                   <Th col="duration"     label="Duration"/>
                   <Th col="dayChange"    label="1D ₹"/>
                   <Th col="dayChangePct" label="1D%"/>
-                  <Th col="pe"           label="PE (TTM)"/>
+                  <Th col="pe"     label="PE (TTM)"  tip={COL_TIPS.pe}/>
                   {/* Signal pillars */}
-                  <Th col="signal" label="Funda" left/>
-                  <Th col="signal" label="Tech"  left/>
-                  <Th col="signal" label="Ins"   left/>
-                  <Th col="signal" label="Events" left/>
-                  <Th col="signal"       label="Signal"/>
+                  <Th col="signal" label="Funda"  left tip={COL_TIPS.funda}/>
+                  <Th col="signal" label="Tech"   left tip={COL_TIPS.tech}/>
+                  <Th col="signal" label="Ins"    left tip={COL_TIPS.ins}/>
+                  <Th col="signal" label="Events" left tip={COL_TIPS.events}/>
+                  <Th col="signal" label="Signal"      tip={COL_TIPS.signal}/>
                 </tr>
               </thead>
               <tbody>

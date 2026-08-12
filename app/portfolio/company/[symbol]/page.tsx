@@ -553,8 +553,8 @@ export default function CompanyPage() {
         {/* ── Quarterly Earnings Trend ────────────────────────────────────────── */}
         {pead.length > 0 && (() => {
           const quarters = [...pead].reverse(); // oldest first
-          const maxRev = Math.max(...quarters.map(p => Math.abs(p.yoy_revenue_pct)), 1);
-          const maxPat = Math.max(...quarters.map(p => Math.abs(p.yoy_profit_pct)), 1);
+          const maxRev = Math.max(...quarters.map(p => Math.abs(p.yoy_revenue_pct ?? 0)), 1);
+          const maxPat = Math.max(...quarters.map(p => Math.abs(p.yoy_profit_pct ?? 0)), 1);
           return (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-4">
@@ -569,18 +569,18 @@ export default function CompanyPage() {
                   <div className="space-y-1.5">
                     {quarters.map((p, i) => {
                       const v = p.yoy_revenue_pct;
-                      const pct = Math.min(100, (Math.abs(v) / maxRev) * 100);
+                      const pct = Math.min(100, (Math.abs(v ?? 0) / maxRev) * 100);
                       return (
                         <div key={i} className="flex items-center gap-2">
                           <span className="text-[10px] text-slate-500 w-16 shrink-0">{p.signal_date.slice(0,7)}</span>
                           <div className="flex-1 relative h-4 bg-slate-800 rounded-sm overflow-hidden">
                             <div
-                              className={`absolute inset-y-0 ${v >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
+                              className={`absolute inset-y-0 ${(v ?? 0) >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
                               style={{ width: `${pct}%` }}
                             />
                           </div>
-                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${v >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${(v ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}
                           </span>
                         </div>
                       );
@@ -593,18 +593,18 @@ export default function CompanyPage() {
                   <div className="space-y-1.5">
                     {quarters.map((p, i) => {
                       const v = p.yoy_profit_pct;
-                      const pct = Math.min(100, (Math.abs(v) / maxPat) * 100);
+                      const pct = Math.min(100, (Math.abs(v ?? 0) / maxPat) * 100);
                       return (
                         <div key={i} className="flex items-center gap-2">
                           <span className="text-[10px] text-slate-500 w-16 shrink-0">{p.signal_date.slice(0,7)}</span>
                           <div className="flex-1 relative h-4 bg-slate-800 rounded-sm overflow-hidden">
                             <div
-                              className={`absolute inset-y-0 ${v >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
+                              className={`absolute inset-y-0 ${(v ?? 0) >= 0 ? 'left-0 bg-emerald-500/60' : 'right-0 bg-red-500/60'}`}
                               style={{ width: `${pct}%` }}
                             />
                           </div>
-                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${v >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+                          <span className={`text-[10px] font-bold w-12 text-right shrink-0 ${(v ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}
                           </span>
                         </div>
                       );
@@ -847,27 +847,32 @@ export default function CompanyPage() {
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-2">
               <MetricBox label="EMA150 Distance"
-                value={`${stage2.ema150_distance_pct >= 0 ? '+' : ''}${stage2.ema150_distance_pct.toFixed(1)}%`}
-                color={stage2.ema150_distance_pct > 0 ? (stage2.ema150_distance_pct > 40 ? 'text-amber-400' : 'text-emerald-400') : 'text-red-400'} />
+                value={stage2.ema150_distance_pct != null ? `${stage2.ema150_distance_pct >= 0 ? '+' : ''}${stage2.ema150_distance_pct.toFixed(1)}%` : '—'}
+                color={(stage2.ema150_distance_pct ?? 0) > 0 ? ((stage2.ema150_distance_pct ?? 0) > 40 ? 'text-amber-400' : 'text-emerald-400') : 'text-red-400'} />
               <MetricBox label="EMA150 Slope"
-                value={`${stage2.ema150_slope >= 0 ? '+' : ''}${stage2.ema150_slope.toFixed(2)}`}
-                color={stage2.ema150_slope > 0 ? 'text-emerald-400' : 'text-red-400'} />
+                value={stage2.ema150_slope != null ? `${stage2.ema150_slope >= 0 ? '+' : ''}${stage2.ema150_slope.toFixed(2)}` : '—'}
+                color={(stage2.ema150_slope ?? 0) > 0 ? 'text-emerald-400' : 'text-red-400'} />
               <MetricBox label="SMA200 Slope"
-                value={`${stage2.sma200_slope >= 0 ? '+' : ''}${stage2.sma200_slope.toFixed(2)}`}
-                color={stage2.sma200_slope > 0 ? 'text-emerald-400' : 'text-red-400'} />
-              <MetricBox label="VCP Score" value={`${stage2.vcp_score}/10`}
-                color={stage2.vcp_score >= 7 ? 'text-emerald-400' : stage2.vcp_score >= 4 ? 'text-yellow-400' : 'text-slate-400'} />
+                value={stage2.sma200_slope != null ? `${stage2.sma200_slope >= 0 ? '+' : ''}${stage2.sma200_slope.toFixed(2)}` : '—'}
+                color={(stage2.sma200_slope ?? 0) > 0 ? 'text-emerald-400' : 'text-red-400'} />
+              <MetricBox label="VCP Score"
+                value={stage2.vcp_score != null ? `${stage2.vcp_score}/10` : '—'}
+                color={(stage2.vcp_score ?? 0) >= 7 ? 'text-emerald-400' : (stage2.vcp_score ?? 0) >= 4 ? 'text-yellow-400' : 'text-slate-400'} />
               <MetricBox label="Pivot Proximity"
-                value={`${stage2.pivot_proximity_pct >= 0 ? '+' : ''}${stage2.pivot_proximity_pct.toFixed(1)}%`}
-                color={Math.abs(stage2.pivot_proximity_pct) <= 3 ? 'text-emerald-400' : stage2.pivot_proximity_pct < -10 ? 'text-slate-500' : 'text-yellow-400'} />
-              <MetricBox label="20d H-L Depth" value={`${stage2.hl_depth_20d.toFixed(1)}%`}
-                color={stage2.hl_depth_20d <= 5 ? 'text-emerald-400' : stage2.hl_depth_20d <= 10 ? 'text-yellow-400' : 'text-red-400'} />
-              <MetricBox label="Vol 5d/50d" value={`${stage2.vol_5d_vs_50d_ratio.toFixed(2)}x`}
-                color={stage2.vol_5d_vs_50d_ratio < 0.7 ? 'text-emerald-400' : stage2.vol_5d_vs_50d_ratio > 2 ? 'text-red-400' : 'text-slate-300'} />
-              <MetricBox label="Base Count" value={`#${stage2.base_count}`}
+                value={stage2.pivot_proximity_pct != null ? `${stage2.pivot_proximity_pct >= 0 ? '+' : ''}${stage2.pivot_proximity_pct.toFixed(1)}%` : '—'}
+                color={Math.abs(stage2.pivot_proximity_pct ?? 0) <= 3 ? 'text-emerald-400' : (stage2.pivot_proximity_pct ?? 0) < -10 ? 'text-slate-500' : 'text-yellow-400'} />
+              <MetricBox label="20d H-L Depth"
+                value={stage2.hl_depth_20d != null ? `${stage2.hl_depth_20d.toFixed(1)}%` : '—'}
+                color={(stage2.hl_depth_20d ?? 0) <= 5 ? 'text-emerald-400' : (stage2.hl_depth_20d ?? 0) <= 10 ? 'text-yellow-400' : 'text-red-400'} />
+              <MetricBox label="Vol 5d/50d"
+                value={stage2.vol_5d_vs_50d_ratio != null ? `${stage2.vol_5d_vs_50d_ratio.toFixed(2)}x` : '—'}
+                color={(stage2.vol_5d_vs_50d_ratio ?? 1) < 0.7 ? 'text-emerald-400' : (stage2.vol_5d_vs_50d_ratio ?? 1) > 2 ? 'text-red-400' : 'text-slate-300'} />
+              <MetricBox label="Base Count"
+                value={stage2.base_count != null ? `#${stage2.base_count}` : '—'}
                 color={stage2.base_count === 1 ? 'text-emerald-400' : stage2.base_count === 2 ? 'text-yellow-400' : 'text-amber-500'} />
-              <MetricBox label="EPS Accel" value={stage2.eps_acceleration_quarters > 0 ? `${stage2.eps_acceleration_quarters}Q ↑` : '—'}
-                color={stage2.eps_acceleration_quarters > 0 ? 'text-emerald-400' : 'text-slate-500'} />
+              <MetricBox label="EPS Accel"
+                value={(stage2.eps_acceleration_quarters ?? 0) > 0 ? `${stage2.eps_acceleration_quarters}Q ↑` : '—'}
+                color={(stage2.eps_acceleration_quarters ?? 0) > 0 ? 'text-emerald-400' : 'text-slate-500'} />
             </div>
 
             <div className="grid grid-cols-4 gap-2">
