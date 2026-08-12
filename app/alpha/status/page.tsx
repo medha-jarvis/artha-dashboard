@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, CheckCircle, Clock, Download, Circle, Play, Loader2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, CheckCircle, Clock, Download, Circle, Play, Loader2, FileText } from 'lucide-react';
 
 interface WatchRow {
   ticker: string;
@@ -104,9 +104,17 @@ export default function AlphaStatusPage() {
               <p className="text-xs text-slate-500">Ingestion → Evaluation pipeline · Manual LLM mode</p>
             </div>
           </div>
-          <button onClick={load} className="text-xs text-slate-500 hover:text-white border border-slate-800 rounded-lg p-1.5">
-            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}/>
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/alpha/docs"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-slate-700 rounded-lg text-slate-400 hover:text-white hover:border-slate-500 transition-colors"
+            >
+              <FileText className="w-3 h-3"/> Doc Library
+            </Link>
+            <button onClick={load} className="text-xs text-slate-500 hover:text-white border border-slate-800 rounded-lg p-1.5">
+              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}/>
+            </button>
+          </div>
         </div>
 
         {/* Summary cards */}
