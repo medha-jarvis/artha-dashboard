@@ -6,6 +6,10 @@ import {
   ArrowLeft, TrendingUp, TrendingDown, Database, AlertTriangle,
   Activity, Users, BarChart2, Target, Zap, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, Legend, ResponsiveContainer, Cell,
+} from 'recharts';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,28 @@ interface DbHolding {
 interface SellTrigger {
   severity: 'CRITICAL' | 'WARNING' | 'MONITOR' | 'BULLISH';
   category: string; signal: string; detail: string;
+}
+
+interface QuarterlyFunda {
+  ticker: string; period: string;
+  revenue_cr: number | null; pat_cr: number | null; opm_pct: number | null;
+}
+
+// ── Period helpers ─────────────────────────────────────────────────────────────
+const MONTH_NUM: Record<string, number> = {
+  Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12
+};
+function parsePeriod(p: string): number {
+  const [m, y] = p.split(' ');
+  return parseInt(y) * 100 + (MONTH_NUM[m] ?? 0);
+}
+function periodToFY(p: string): string {
+  const [m, yr] = p.split(' ');
+  const y = parseInt(yr);
+  const q: Record<string, [number, number]> = { Mar:[4,0], Jun:[1,1], Sep:[2,1], Dec:[3,1] };
+  if (!q[m]) return p;
+  const [qn, adj] = q[m];
+  return `Q${qn}FY${((y + adj) % 100).toString().padStart(2,'0')}`;
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
@@ -333,6 +359,7 @@ export default function CompanyPage() {
 
   const [showMonitor,    setShowMonitor]    = useState(false);
   const [thesisExpanded, setThesisExpanded] = useState(false);
+  const [quarterlyFunda, setQuarterlyFunda] = useState<QuarterlyFunda[]>([]);
 
   const sb = (path: string) =>
     fetch(`/api/sb/${path}`, { cache: 'no-store' }).then(r => r.json()).catch(() => []);
@@ -352,6 +379,12 @@ export default function CompanyPage() {
       if (coData?.error) setError(coData.error);
       setLoading(false);
     }).catch(e => { setError(e.message); setLoading(false); });
+  }, [sym]);
+
+  useEffect(() => {
+    if (!sym) return;
+    sb(`quarterly_fundamentals?ticker=eq.${sym}&order=period.asc&limit=20`)
+      .then(d => { if (Array.isArray(d)) setQuarterlyFunda(d as QuarterlyFunda[]); });
   }, [sym]);
 
   useEffect(() => {
@@ -415,6 +448,9 @@ export default function CompanyPage() {
   const sigCfg    = signal ? (SIGNAL_CFG[signal] ?? SIGNAL_CFG.HOLD) : null;
   const w52High   = quote?.week_52_high ?? co['52_week_high'];
   const w52Low    = quote?.week_52_low  ?? co['52_week_low'];
+  // Compute % from 52W range using the actual quote values (co has ±15% estimates)
+  const pctFrom52High = w52High && w52High > 0 ? ((livePrice - w52High) / w52High * 100) : null;
+  const pctFrom52Low  = w52Low  && w52Low  > 0 ? ((livePrice - w52Low)  / w52Low  * 100) : null;
   const pe        = quote?.pe_trailing  ?? dbHolding?.trailingPE;
   const medPE     = dbHolding?.medianPE5yr;
   const lcBadge   = stage2 ? (LC_CFG[stage2.lifecycle_state] ?? LC_CFG.WATCHING) : '';
@@ -627,6 +663,96 @@ export default function CompanyPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Quarterly Fundamentals (8Q Chart) ─────────────────────────────────── */}
+        {quarterlyFunda.length >= 2 && (() => {
+          const sorted = [...quarterlyFunda].sort((a,b) => parsePeriod(a.period) - parsePeriod(b.period));
+          const last8  = sorted.slice(-8);
+          const chartData = last8.map(q => ({
+            label: periodToFY(q.period),
+            rev:   q.revenue_cr,
+            pat:   q.pat_cr,
+            opm:   q.opm_pct,
+          }));
+          const maxRev = Math.max(...last8.map(q => q.revenue_cr ?? 0), 1);
+          return (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart2 className="w-4 h-4 text-amber-400" />
+                <h2 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Quarterly Fundamentals</h2>
+                <span className="text-[10px] text-slate-600">last {last8.length} quarters · from Screener.in</span>
+              </div>
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={chartData} margin={{top:4,right:36,left:0,bottom:0}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
+                  <XAxis dataKey="label" stroke="#475569" tick={{fontSize:9}} />
+                  <YAxis yAxisId="cr" stroke="#475569" tick={{fontSize:9}}
+                    tickFormatter={v => v>=1000?`${(v/1000).toFixed(0)}kCr`:`${v}Cr`} />
+                  <YAxis yAxisId="pct" orientation="right" stroke="#f59e0b"
+                    tick={{fontSize:9}} tickFormatter={v=>`${v}%`} domain={['auto','auto']} />
+                  <Tooltip
+                    contentStyle={{backgroundColor:'#0f172a',border:'1px solid #334155',borderRadius:8,fontSize:11}}
+                    formatter={(v:unknown,name:string)=>{
+                      if(name==='Revenue') return [`₹${v}Cr`,'Revenue'];
+                      if(name==='PAT')     return [`₹${v}Cr`,'Net Profit'];
+                      if(name==='OPM %')   return [`${v}%`,'OPM'];
+                      return [v,name];
+                    }}
+                  />
+                  <Legend wrapperStyle={{fontSize:10}}/>
+                  <Bar yAxisId="cr" dataKey="rev" name="Revenue" radius={[3,3,0,0]} maxBarSize={28}>
+                    {chartData.map((_,i) => <Cell key={i} fill="#3b82f6" fillOpacity={0.75}/>)}
+                  </Bar>
+                  <Bar yAxisId="cr" dataKey="pat" name="PAT" radius={[3,3,0,0]} maxBarSize={28}>
+                    {chartData.map((d,i) => <Cell key={i} fill={(d.pat??0)>0?'#10b981':'#ef4444'} fillOpacity={0.9}/>)}
+                  </Bar>
+                  <Line yAxisId="pct" type="monotone" dataKey="opm" name="OPM %" stroke="#f59e0b"
+                    strokeWidth={2} dot={{r:3,fill:'#f59e0b'}} connectNulls/>
+                </ComposedChart>
+              </ResponsiveContainer>
+              {/* YoY growth table for last 4 quarters */}
+              {last8.length >= 5 && (
+                <div className="mt-3 pt-3 border-t border-slate-800 overflow-x-auto">
+                  <div className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">YoY Growth (vs same quarter last year)</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {last8.slice(-4).map((q, i) => {
+                      const idx = last8.indexOf(q);
+                      const yoy = idx >= 4 ? last8[idx - 4] : null;
+                      const revG = yoy?.revenue_cr && q.revenue_cr ? ((q.revenue_cr - yoy.revenue_cr) / Math.abs(yoy.revenue_cr) * 100) : null;
+                      const patG = yoy?.pat_cr && q.pat_cr ? ((q.pat_cr - yoy.pat_cr) / Math.abs(yoy.pat_cr) * 100) : null;
+                      const opmD = yoy?.opm_pct != null && q.opm_pct != null ? (q.opm_pct - yoy.opm_pct) : null;
+                      return (
+                        <div key={i} className="bg-slate-800/60 rounded-lg p-2.5">
+                          <div className="text-[10px] text-slate-400 font-semibold mb-1.5">{periodToFY(q.period)}</div>
+                          <div className="space-y-1 text-[10px]">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Rev</span>
+                              <span className={revG!=null?(revG>=0?'text-emerald-400':'text-red-400'):'text-slate-600'}>
+                                {revG!=null?`${revG>=0?'+':''}${revG.toFixed(0)}%`:'—'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">PAT</span>
+                              <span className={patG!=null?(patG>=0?'text-emerald-400':'text-red-400'):'text-slate-600'}>
+                                {patG!=null?`${patG>=0?'+':''}${patG.toFixed(0)}%`:'—'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">OPM</span>
+                              <span className={opmD!=null?(opmD>=0?'text-amber-400':'text-red-400'):'text-slate-600'}>
+                                {opmD!=null?`${opmD>=0?'+':''}${opmD.toFixed(1)}pp`:'—'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })()}
@@ -1053,13 +1179,15 @@ export default function CompanyPage() {
             <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
               <div className="bg-slate-800 rounded-lg p-2.5">
                 <div className="text-slate-500 mb-0.5">↓ from 52W High</div>
-                <div className={`font-bold ${(co.price_from_52w_high_pct ?? -99) > -5 ? 'text-emerald-400' : (co.price_from_52w_high_pct ?? -99) > -15 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {fmtPct(co.price_from_52w_high_pct, 1)}
+                <div className={`font-bold ${(pctFrom52High ?? -99) > -5 ? 'text-emerald-400' : (pctFrom52High ?? -99) > -15 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {pctFrom52High != null ? `${pctFrom52High >= 0 ? '+' : ''}${pctFrom52High.toFixed(1)}%` : '—'}
                 </div>
               </div>
               <div className="bg-slate-800 rounded-lg p-2.5">
                 <div className="text-slate-500 mb-0.5">↑ from 52W Low</div>
-                <div className="font-bold text-emerald-400">+{(co.price_from_52w_low_pct ?? 0).toFixed(1)}%</div>
+                <div className={`font-bold ${(pctFrom52Low ?? 0) > 50 ? 'text-emerald-300' : 'text-emerald-400'}`}>
+                  {pctFrom52Low != null ? `+${pctFrom52Low.toFixed(1)}%` : '—'}
+                </div>
               </div>
             </div>
           </div>
