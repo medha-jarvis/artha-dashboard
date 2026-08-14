@@ -695,11 +695,11 @@ export default function CompanyPage() {
                     tick={{fontSize:9}} tickFormatter={v=>`${v}%`} domain={['auto','auto']} />
                   <Tooltip
                     contentStyle={{backgroundColor:'#0f172a',border:'1px solid #334155',borderRadius:8,fontSize:11}}
-                    formatter={(v:unknown,name:string)=>{
-                      if(name==='Revenue') return [`₹${v}Cr`,'Revenue'];
-                      if(name==='PAT')     return [`₹${v}Cr`,'Net Profit'];
-                      if(name==='OPM %')   return [`${v}%`,'OPM'];
-                      return [v,name];
+                    formatter={(v:number|string,name:string)=>{
+                      if(name==='Revenue') return [`₹${v}Cr`,'Revenue'] as [string,string];
+                      if(name==='PAT')     return [`₹${v}Cr`,'Net Profit'] as [string,string];
+                      if(name==='OPM %')   return [`${v}%`,'OPM'] as [string,string];
+                      return [`${v}`,name] as [string,string];
                     }}
                   />
                   <Legend wrapperStyle={{fontSize:10}}/>
