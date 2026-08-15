@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown,
@@ -57,12 +58,12 @@ interface Signal {
 }
 
 type SortKey =
-  | 'ticker' | 'stage2_subtype' | 'vol_5d_vs_50d_ratio' | 'days_in_stage2'
+  | 'ticker' | 'stage2_subtype' | 'stage2_score' | 'vol_5d_vs_50d_ratio' | 'days_in_stage2'
   | 'rs_63d_score' | 'rs_52w_percentile' | 'price_52w_position' | 'ema150_distance_pct'
   | 'ttm_eps_growth' | 'returns_since_breakout' | 'daily_return' | 'sma200_slope' | 'sector';
 
 type SortDir    = 'asc' | 'desc';
-type FilterMode = 'all' | 'early_s2' | 'late_s2' | 'stage1' | 'prime' | 'golden_window' | 'rs_leaders';
+type FilterMode = 'all' | 'early_s2' | 'late_s2' | 'stage1' | 'elite' | 'prime' | 'golden_window' | 'rs_leaders';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +137,10 @@ const TIPS: Record<string, { title: string; content: string }> = {
   sector: {
     title: 'Sector',
     content: 'NSE sector classification, colour-coded by type. Pro tip: when 4–5 stocks in the same sector all move to Stage 2A within the same week, that is a sector rotation signal — a rising tide. Financials (blue), Tech/IT (violet), Healthcare (green), Industrials/Capital Goods (amber), Consumer (orange), Energy (yellow), Materials (stone), Real Estate (purple), Telecom (sky).',
+  },
+  wcs: {
+    title: 'WCS — Weinstein Conviction Score (0–100)',
+    content: 'Measures quality within a stage — not a filter, a gradient. Hover each cell for the exact point breakdown. Stage 2A weights: Volume surge (35pts, the #1 breakout signal) + Mansfield RS (30pts) + MA slope (20pts) + Minervini radar chips (15pts). Stage 2B weights: MA slope (30pts) + Mansfield RS (30pts) + 52W price position (20pts) + extension risk (10pts) + radar (10pts). Stage 1 weights: Mansfield RS turning positive (30pts) + proximity to resistance breakout (30pts) + MA flatness (20pts) + radar forming (20pts). Scores: 80–100 = Elite, 60–79 = Strong, 40–59 = Moderate, <40 = Marginal.',
   },
   radar: {
     title: 'Minervini Radar — Daily Detail',
@@ -439,6 +444,173 @@ function FundaCell({ eps, roce, accel, accelQtrs, pe }: {
   );
 }
 
+// ─── WCS breakdown + cell ────────────────────────────────────────────────────
+
+interface BDRow { key: string; pts: number; max: number; label: string }
+interface WCSBreakdown { stageName: string; rows: BDRow[]; total: number }
+
+function computeWCSBreakdown(sig: Signal): WCSBreakdown {
+  const stage  = sig.stage2_subtype || '';
+  const vol    = sig.vol_5d_vs_50d_ratio ?? 0;
+  const mrs    = sig.rs_63d_score ?? 0;
+  const slope  = (sig.sma200_slope ?? 0) * 100;
+  const pos52w = sig.price_52w_position ?? 50;
+  const madist = sig.ema150_distance_pct ?? 0;
+
+  let chips = 0;
+  if ((sig.hl_depth_20d ?? 100) <= 6) chips++;
+  if ((sig.vcp_volume_ratio ?? 1) < 0.5) chips++;
+  if (sig.pivot_proximity_pct != null && sig.pivot_proximity_pct >= -5 && sig.pivot_proximity_pct <= 2) chips++;
+  if (sig.rs_line_new_high) chips++;
+
+  const R2A = [0, 4, 8, 12, 15];
+  const R2B = [0, 3, 5,  8, 10];
+  const R1  = [0, 5, 10, 15, 20];
+
+  const fmtVol   = `${vol.toFixed(2)}× weekly vol`;
+  const fmtMrs   = `MRS ${mrs >= 0 ? '+' : ''}${mrs.toFixed(1)}`;
+  const fmtSlope = `slope ${slope >= 0 ? '+' : ''}${slope.toFixed(2)}%/wk`;
+  const fmtPos   = `52W pos ${pos52w.toFixed(0)}%`;
+  const fmtDist  = `+${madist.toFixed(1)}% above MA`;
+  const fmtChips = `${chips}/4 radar chips`;
+
+  if (stage === 'EARLY_STAGE_2') {
+    const vp = vol >= 3.0 ? 35 : vol >= 2.5 ? 28 : vol >= 2.0 ? 20 : vol >= 1.75 ? 14 : vol >= 1.5 ? 8 : 0;
+    const mp = mrs > 25 ? 30 : mrs > 15 ? 22 : mrs > 10 ? 15 : mrs > 5 ? 10 : mrs > 0 ? 5 : 0;
+    const sp = slope > 0.5 ? 20 : slope > 0.3 ? 15 : slope > 0.1 ? 8 : slope >= 0 ? 3 : 0;
+    const rp = R2A[chips];
+    return { stageName: 'Stage 2A', total: Math.min(100, vp+mp+sp+rp), rows: [
+      { key: 'Volume',    pts: vp, max: 35, label: fmtVol },
+      { key: 'MRS',       pts: mp, max: 30, label: fmtMrs },
+      { key: 'MA Slope',  pts: sp, max: 20, label: fmtSlope },
+      { key: 'Radar',     pts: rp, max: 15, label: fmtChips },
+    ]};
+  }
+
+  if (stage === 'LATE_STAGE_2') {
+    const sp = slope > 0.5 ? 30 : slope > 0.3 ? 22 : slope > 0.1 ? 12 : slope >= 0 ? 5 : 0;
+    const mp = mrs > 25 ? 30 : mrs > 15 ? 22 : mrs > 10 ? 15 : mrs > 5 ? 10 : mrs > 0 ? 5 : 0;
+    const pp = pos52w >= 90 ? 20 : pos52w >= 75 ? 15 : pos52w >= 50 ? 8 : 0;
+    const dp = madist <= 15 ? 10 : madist <= 25 ? 5 : madist <= 35 ? 2 : 0;
+    const rp = R2B[chips];
+    return { stageName: 'Stage 2B', total: Math.min(100, sp+mp+pp+dp+rp), rows: [
+      { key: 'MA Slope',  pts: sp, max: 30, label: fmtSlope },
+      { key: 'MRS',       pts: mp, max: 30, label: fmtMrs },
+      { key: '52W Pos',   pts: pp, max: 20, label: fmtPos },
+      { key: 'Extension', pts: dp, max: 10, label: fmtDist },
+      { key: 'Radar',     pts: rp, max: 10, label: fmtChips },
+    ]};
+  }
+
+  if (stage === 'STAGE_1_BASING') {
+    const mp = mrs > 10 ? 30 : mrs > 5 ? 20 : mrs > 0 ? 12 : mrs > -5 ? 5 : 0;
+    const pp = pos52w >= 85 ? 30 : pos52w >= 70 ? 20 : pos52w >= 55 ? 10 : 0;
+    const absSlope = Math.abs(slope);
+    const sp = absSlope <= 0.10 ? 20 : absSlope <= 0.30 ? 12 : absSlope <= 0.50 ? 5 : 0;
+    const rp = R1[chips];
+    return { stageName: 'Stage 1', total: Math.min(100, mp+pp+sp+rp), rows: [
+      { key: 'MRS',       pts: mp, max: 30, label: fmtMrs },
+      { key: '52W Pos',   pts: pp, max: 30, label: fmtPos },
+      { key: 'MA Flat',   pts: sp, max: 20, label: fmtSlope },
+      { key: 'Radar',     pts: rp, max: 20, label: fmtChips },
+    ]};
+  }
+
+  return { stageName: '—', total: 0, rows: [] };
+}
+
+function WCSCell({ sig }: { sig: Signal }) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const score = sig.stage2_score;
+  const bd    = computeWCSBreakdown(sig);
+
+  const openTooltip = useCallback(() => {
+    if (ref.current) setRect(ref.current.getBoundingClientRect());
+    setOpen(true);
+  }, []);
+  const close = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onScroll = () => close();
+    window.addEventListener('scroll', onScroll, true);
+    return () => window.removeEventListener('scroll', onScroll, true);
+  }, [open, close]);
+
+  const tipStyle = (): React.CSSProperties => {
+    if (!rect) return {};
+    const TW = 228;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.left;
+    if (left + TW > vw - 8) left = vw - TW - 8;
+    if (left < 8) left = 8;
+    const spaceBelow = vh - rect.bottom;
+    const placeBelow = spaceBelow >= 210 || rect.top < 210;
+    return placeBelow
+      ? { position: 'fixed', top: rect.bottom + 4, left, width: TW, zIndex: 9999 }
+      : { position: 'fixed', top: rect.top - 4, left, width: TW, zIndex: 9999, transform: 'translateY(-100%)' };
+  };
+
+  const scoreCls = score >= 80 ? 'text-emerald-400' : score >= 60 ? 'text-amber-400' : score >= 40 ? 'text-slate-400' : 'text-slate-600';
+  const barCls   = score >= 80 ? 'bg-emerald-500'   : score >= 60 ? 'bg-amber-500'   : 'bg-slate-700';
+  const label    = score >= 80 ? 'Elite' : score >= 60 ? 'Strong' : score >= 40 ? 'Moderate' : 'Marginal';
+
+  return (
+    <>
+      <div ref={ref} className="text-xs cursor-help" onMouseEnter={openTooltip} onMouseLeave={close}>
+        <div className="flex items-baseline gap-0.5">
+          <span className={`text-base font-black tabular-nums ${scoreCls}`}>{score}</span>
+          <span className="text-[9px] text-slate-700">/100</span>
+        </div>
+        <div className="mt-1 h-[3px] w-12 bg-slate-800 rounded-full overflow-hidden">
+          <div className={`h-full ${barCls} rounded-full transition-all`} style={{ width: `${score}%` }} />
+        </div>
+        <div className={`text-[9px] mt-0.5 font-semibold ${scoreCls}`}>{label}</div>
+      </div>
+
+      {open && typeof document !== 'undefined' && createPortal(
+        <div style={tipStyle()}
+          className="bg-[#1c2133] border border-slate-600/70 rounded-xl shadow-2xl p-3 text-[9px] pointer-events-none select-none">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-bold text-white">WCS — {bd.stageName}</span>
+            <span className={`text-[10px] font-black tabular-nums ${scoreCls}`}>{score}/100</span>
+          </div>
+          <div className="space-y-1.5">
+            {bd.rows.map(r => {
+              const pct = r.max > 0 ? r.pts / r.max : 0;
+              const rowCls = pct >= 1 ? 'text-emerald-400' : pct >= 0.6 ? 'text-amber-400' : 'text-slate-500';
+              return (
+                <div key={r.key}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-slate-400 w-[72px] shrink-0">{r.key}</span>
+                    <span className="text-slate-500 flex-1 text-right pr-2 truncate">{r.label}</span>
+                    <span className={`tabular-nums font-bold w-10 text-right shrink-0 ${rowCls}`}>{r.pts}/{r.max}</span>
+                  </div>
+                  <div className="h-[2px] bg-slate-800 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${
+                      pct >= 1 ? 'bg-emerald-500' : pct >= 0.6 ? 'bg-amber-500' : 'bg-slate-600'
+                    }`} style={{ width: `${pct * 100}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="border-t border-slate-700/60 mt-2.5 pt-2 flex items-center justify-between">
+            <span className="text-slate-500">
+              {label === 'Elite' ? '🟢 Highest conviction' : label === 'Strong' ? '🟡 Good setup' : label === 'Moderate' ? '⚪ Watch closely' : '⚫ Borderline'}
+            </span>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
 // ─── Table header helpers ─────────────────────────────────────────────────────
 
 function Th({ col, label, right, sticky, active, dir, onSort, tipKey }: {
@@ -596,6 +768,7 @@ export default function Stage2Page() {
   const lateS2     = useMemo(() => sectorFiltered.filter(s => s.stage2_subtype === 'LATE_STAGE_2').length, [sectorFiltered]);
   const stage1cnt  = useMemo(() => sectorFiltered.filter(s => s.stage2_subtype === 'STAGE_1_BASING').length, [sectorFiltered]);
   const primeCnt   = useMemo(() => sectorFiltered.filter(isPrime).length, [sectorFiltered]);
+  const eliteCnt   = useMemo(() => sectorFiltered.filter(s => s.stage2_score >= 80).length, [sectorFiltered]);
   const goldenCnt  = useMemo(() => sectorFiltered.filter(isGoldenWindow).length, [sectorFiltered]);
   const rsLdrCnt   = useMemo(() => sectorFiltered.filter(isRsLeader).length, [sectorFiltered]);
   const avgReturn  = useMemo(() => {
@@ -612,6 +785,7 @@ export default function Stage2Page() {
       case 'early_s2':      base = base.filter(s => s.stage2_subtype === 'EARLY_STAGE_2'); break;
       case 'late_s2':       base = base.filter(s => s.stage2_subtype === 'LATE_STAGE_2'); break;
       case 'stage1':        base = base.filter(s => s.stage2_subtype === 'STAGE_1_BASING'); break;
+      case 'elite':         base = base.filter(s => s.stage2_score >= 80); break;
       case 'prime':         base = base.filter(isPrime); break;
       case 'golden_window': base = base.filter(isGoldenWindow); break;
       case 'rs_leaders':    base = base.filter(isRsLeader); break;
@@ -726,8 +900,8 @@ export default function Stage2Page() {
               sub="Stage 2B"      filterKey="late_s2"       currentFilter={filter} onClick={() => toggleFilter('late_s2')} />
             <StatCard label="Basing"         value={stage1cnt.toString()} color="text-blue-400"
               sub="Stage 1"       filterKey="stage1"        currentFilter={filter} onClick={() => toggleFilter('stage1')} />
-            <StatCard label="Prime Setups"   value={primeCnt.toString()} color="text-violet-400"
-              sub="≥3 green radar" filterKey="prime"        currentFilter={filter} onClick={() => toggleFilter('prime')} />
+            <StatCard label="Elite WCS"      value={eliteCnt.toString()} color="text-violet-400"
+              sub="Score ≥ 80"    filterKey="elite"        currentFilter={filter} onClick={() => toggleFilter('elite')} />
             <StatCard label="Golden Window"  value={goldenCnt.toString()} color="text-amber-400"
               sub="2A · ≤4wk · RS>0" filterKey="golden_window" currentFilter={filter} onClick={() => toggleFilter('golden_window')} />
             <StatCard label="RS Leaders"     value={rsLdrCnt.toString()} color="text-cyan-400"
@@ -763,9 +937,10 @@ export default function Stage2Page() {
           {/* Quality filters */}
           <div className="flex gap-1.5">
             {([
-              ['prime',         '⬡ Prime Setup', 'border-violet-800/60 text-violet-400 bg-violet-950/30 hover:bg-violet-950/50', 'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
-              ['golden_window', '★ Golden Window','border-amber-800/60 text-amber-400 bg-amber-950/30 hover:bg-amber-950/50',   'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
-              ['rs_leaders',    '↑ RS Leaders',   'border-cyan-800/60 text-cyan-400 bg-cyan-950/30 hover:bg-cyan-950/50',       'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
+              ['elite',         '★ Elite (80+)',    'border-violet-700/70 text-violet-300 bg-violet-950/40', 'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
+              ['golden_window', '◆ Golden Window',  'border-amber-700/70 text-amber-300 bg-amber-950/40',   'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
+              ['prime',         '⬡ Prime Radar',    'border-teal-700/70 text-teal-300 bg-teal-950/40',      'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
+              ['rs_leaders',    '↑ RS Leaders',     'border-cyan-700/70 text-cyan-300 bg-cyan-950/40',      'border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-300'],
             ] as [FilterMode, string, string, string][]).map(([v, l, activeCls, inactiveCls]) => (
               <button key={v} onClick={() => toggleFilter(v)}
                 className={`px-2.5 py-1.5 text-xs rounded-lg border font-medium transition whitespace-nowrap ${
@@ -810,10 +985,17 @@ export default function Stage2Page() {
             Fresh institutional breakout with market outperformance confirmed. Best risk-reward entry window.
           </div>
         )}
-        {filter === 'prime' && (
+        {filter === 'elite' && (
           <div className="bg-violet-950/30 border border-violet-800/40 rounded-lg px-4 py-2 text-xs text-violet-300/80">
-            <span className="font-bold text-violet-300">Prime Setups</span> — Stage 2A or 2B with ≥ 3 of 4 Minervini radar chips green (VCP tight + volume dry-up + at pivot + MA stacked).
-            Weinstein and Minervini are both aligned. Highest-conviction setups in the universe.
+            <span className="font-bold text-violet-300">Elite WCS ≥ 80</span> — The top-scoring setups in the universe across all stage-specific dimensions.
+            Stage 2A: strong breakout volume + outperforming RS + rising MA. Stage 2B: steep MA slope + RS leadership + near 52-week highs.
+            Hover each WCS score for the exact point breakdown.
+          </div>
+        )}
+        {filter === 'prime' && (
+          <div className="bg-teal-950/30 border border-teal-800/40 rounded-lg px-4 py-2 text-xs text-teal-300/80">
+            <span className="font-bold text-teal-300">Prime Radar</span> — Stage 2A or 2B with ≥ 3 of 4 Minervini radar chips green.
+            VCP tight + volume dry-up + at pivot + daily MA stacked. Weinstein weekly stage confirmed, Minervini daily setup aligned.
           </div>
         )}
 
@@ -846,7 +1028,9 @@ export default function Stage2Page() {
                     <Th col="ticker"               label="Stock"        sticky active={sortKey==='ticker'}               dir={sortDir} onSort={onSort} tipKey="ticker" />
                     {/* 2 Stage */}
                     <Th col="stage2_subtype"        label="Stage"               active={sortKey==='stage2_subtype'}        dir={sortDir} onSort={onSort} tipKey="stage2_subtype" />
-                    {/* 3 Conditions */}
+                    {/* 3 WCS */}
+                    <Th col="stage2_score"          label="WCS"                 active={sortKey==='stage2_score'}          dir={sortDir} onSort={onSort} tipKey="wcs" />
+                    {/* 4 Conditions */}
                     <ThStatic label="Weinstein ×4" tipKey="wein_conditions" />
                     {/* 4 Weekly Vol */}
                     <Th col="vol_5d_vs_50d_ratio"  label="Wk Vol"              active={sortKey==='vol_5d_vs_50d_ratio'}   dir={sortDir} onSort={onSort} tipKey="weekly_vol" />
@@ -919,7 +1103,12 @@ export default function Stage2Page() {
                           <WeinSteinStagePill subtype={sig.stage2_subtype} />
                         </td>
 
-                        {/* 3 — Weinstein conditions */}
+                        {/* 3 — WCS */}
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <WCSCell sig={sig} />
+                        </td>
+
+                        {/* 4 — Weinstein conditions */}
                         <td className="px-2 py-2 whitespace-nowrap">
                           <WeinConditionsCell
                             aboveMa30w={sig.above_50sma}

@@ -71,6 +71,69 @@ STAGE_SYNTHETIC_SCORES = {
     "STAGE_4_DECLINING":  0,
 }
 
+def compute_wcs(metrics: dict, stage: str) -> int:
+    """
+    Weinstein Conviction Score (WCS) 0–100.
+    Quality gradient within a stage — not a gate. Stage-specific weights.
+
+    Stage 2A: Vol(35) + MRS(30) + Slope(20) + Radar(15) = 100
+    Stage 2B: Slope(30) + MRS(30) + 52WPos(20) + MADist(10) + Radar(10) = 100
+    Stage 1:  MRS(30) + 52WPos(30) + Slope-flat(20) + Radar(20) = 100
+    """
+    vol    = float(metrics.get("vol_5d_vs_50d_ratio") or 0)
+    mrs    = float(metrics.get("rs_63d_score") or 0)
+    slope  = float(metrics.get("sma200_slope") or 0) * 100   # → %/wk
+    pos52w = float(metrics.get("price_52w_position") or 50)
+    madist = float(metrics.get("ema150_distance_pct") or 0)
+
+    # Minervini radar green chip count (0–4)
+    chips = 0
+    if float(metrics.get("hl_depth_20d") or 100) <= 6:      chips += 1
+    if float(metrics.get("vcp_volume_ratio") or 1) < 0.5:   chips += 1
+    piv = metrics.get("pivot_proximity_pct")
+    if piv is not None and -5 <= float(piv) <= 2:            chips += 1
+    if metrics.get("rs_line_new_high"):                      chips += 1
+
+    # Radar points tables (indexed by chip count 0-4)
+    R2A = [0, 4, 8, 12, 15]   # max 15 for 2A
+    R2B = [0, 3, 5,  8, 10]   # max 10 for 2B
+    R1  = [0, 5, 10, 15, 20]  # max 20 for Stage 1
+
+    if stage == "EARLY_STAGE_2":
+        vol_pts = (35 if vol >= 3.0 else 28 if vol >= 2.5 else
+                   20 if vol >= 2.0 else 14 if vol >= 1.75 else
+                    8 if vol >= 1.5 else 0)
+        mrs_pts = (30 if mrs > 25 else 22 if mrs > 15 else
+                   15 if mrs > 10 else 10 if mrs >  5 else
+                    5 if mrs >  0 else 0)
+        slp_pts = (20 if slope > 0.5 else 15 if slope > 0.3 else
+                    8 if slope > 0.1 else  3 if slope >= 0 else 0)
+        return min(100, vol_pts + mrs_pts + slp_pts + R2A[chips])
+
+    elif stage == "LATE_STAGE_2":
+        slp_pts = (30 if slope > 0.5 else 22 if slope > 0.3 else
+                   12 if slope > 0.1 else  5 if slope >= 0 else 0)
+        mrs_pts = (30 if mrs > 25 else 22 if mrs > 15 else
+                   15 if mrs > 10 else 10 if mrs >  5 else
+                    5 if mrs >  0 else 0)
+        pos_pts = (20 if pos52w >= 90 else 15 if pos52w >= 75 else
+                    8 if pos52w >= 50 else 0)
+        dist_pts = (10 if madist <= 15 else 5 if madist <= 25 else
+                     2 if madist <= 35 else 0)
+        return min(100, slp_pts + mrs_pts + pos_pts + dist_pts + R2B[chips])
+
+    elif stage == "STAGE_1_BASING":
+        mrs_pts = (30 if mrs > 10 else 20 if mrs >  5 else
+                   12 if mrs >  0 else  5 if mrs > -5 else 0)
+        pos_pts = (30 if pos52w >= 85 else 20 if pos52w >= 70 else
+                   10 if pos52w >= 55 else 0)
+        absslp  = abs(slope)
+        slp_pts = (20 if absslp <= 0.10 else 12 if absslp <= 0.30 else
+                    5 if absslp <= 0.50 else 0)
+        return min(100, mrs_pts + pos_pts + slp_pts + R1[chips])
+
+    return 0
+
 STAGE_TIERS = {
     "EARLY_STAGE_2":     "CONFIRMED",
     "LATE_STAGE_2":      "EMERGING",
@@ -814,7 +877,7 @@ def main():
 
     for ticker, metrics in results_map.items():
         stage      = metrics["weinstein_stage"]
-        score      = STAGE_SYNTHETIC_SCORES.get(stage, 0)
+        score      = compute_wcs(metrics, stage)   # real WCS 0-100
         tier       = STAGE_TIERS.get(stage, "WATCHING")
         rs_52w_pct = pct_map.get(ticker)
         metrics["rs_52w_percentile"] = rs_52w_pct
@@ -913,9 +976,9 @@ def main():
 
 # ── Compat aliases for backfill script ────────────────────────────────────────
 def compute_stage2_score(metrics: dict) -> tuple[int, dict]:
-    """Compat shim: return synthetic score and empty components."""
+    """Compat shim: return WCS (or synthetic fallback) and empty components."""
     stage = metrics.get("weinstein_stage", "STAGE_4_DECLINING")
-    score = STAGE_SYNTHETIC_SCORES.get(stage, 0)
+    score = compute_wcs(metrics, stage) or STAGE_SYNTHETIC_SCORES.get(stage, 0)
     return score, {"trend": 0, "fundamental": 0, "volatility": 0, "pivot": 0, "rs": 0}
 
 def tier_from_score(score: int) -> str:
