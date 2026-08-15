@@ -1,7 +1,9 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, FileText, ExternalLink, ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, FileText, ExternalLink, ChevronDown, ChevronRight, Loader2, RefreshCw, Zap } from 'lucide-react';
+
+const VPS_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://31.97.227.135:5000/api';
 
 interface ExtractionRow {
   id: string;
@@ -20,7 +22,7 @@ interface ExtractionRow {
   extracted_at: string | null;
 }
 
-const VPS = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://31.97.227.135:5000/api';
+const VPS = VPS_BASE;
 
 const DOC_COLORS: Record<string, string> = {
   CONCALL:        'bg-blue-500/20 text-blue-400',
@@ -84,10 +86,47 @@ function MarkdownModal({ newsId, ticker, onClose }: { newsId: string; ticker: st
 
 function ExtractionCard({ row, onView }: { row: ExtractionRow; onView: () => void }) {
   const [open, setOpen] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractMsg, setExtractMsg] = useState('');
   const color = DOC_COLORS[row.doc_type] || 'bg-slate-700 text-slate-400';
   const label = DOC_LABELS[row.doc_type] || row.doc_type;
   const kbSize = row.md_size_bytes ? Math.round(row.md_size_bytes / 1024) : 0;
   const dt = row.extracted_at ? new Date(row.extracted_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+
+  const triggerExtract = async () => {
+    setExtracting(true);
+    setExtractMsg('Starting extraction…');
+    try {
+      const r = await fetch(`${VPS}/trigger/alpha-extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ news_id: row.news_id, ticker: row.ticker }),
+      });
+      const d = await r.json();
+      if (!d.ok) { setExtractMsg(`Error: ${d.error}`); setExtracting(false); return; }
+      setExtractMsg('Running… polling for result');
+      // Poll until markdown appears
+      let attempts = 0;
+      const poll = async () => {
+        attempts++;
+        const s = await fetch(`${VPS}/alpha/extract-status?news_id=${row.news_id}&ticker=${row.ticker}`)
+          .then(r => r.json()).catch(() => ({}));
+        if (s.done) {
+          setExtractMsg(`Done — ${Math.round((s.md_bytes || 0) / 1024)}KB extracted`);
+          setExtracting(false);
+        } else if (s.failed || attempts > 30) {
+          setExtractMsg(s.last_log?.slice(-80) || 'Extraction failed');
+          setExtracting(false);
+        } else {
+          setTimeout(poll, 5000);
+        }
+      };
+      setTimeout(poll, 5000);
+    } catch (e: any) {
+      setExtractMsg(`Error: ${e.message}`);
+      setExtracting(false);
+    }
+  };
 
   return (
     <div className="border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition-colors">
@@ -120,13 +159,15 @@ function ExtractionCard({ row, onView }: { row: ExtractionRow; onView: () => voi
             <p><span className="text-slate-400">Pages:</span> {row.page_count} · <span className="text-slate-400">Tables:</span> {row.tables_extracted} · <span className="text-slate-400">MD size:</span> {kbSize}KB</p>
             <p className="truncate"><span className="text-slate-400">news_id:</span> {row.news_id}</p>
           </div>
-          <div className="flex gap-2 flex-wrap">
-            <button
-              onClick={onView}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 border border-violet-500/30 transition-colors"
-            >
-              <FileText className="w-3.5 h-3.5"/> View Markdown
-            </button>
+          <div className="flex gap-2 flex-wrap items-center">
+            {row.extraction_status === 'complete' && (
+              <button
+                onClick={onView}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600/20 hover:bg-violet-600/30 text-violet-300 border border-violet-500/30 transition-colors"
+              >
+                <FileText className="w-3.5 h-3.5"/> View Markdown
+              </button>
+            )}
             {row.source_pdf_r2 && (
               <a
                 href={row.source_pdf_r2}
@@ -136,14 +177,33 @@ function ExtractionCard({ row, onView }: { row: ExtractionRow; onView: () => voi
                 <ExternalLink className="w-3.5 h-3.5"/> PDF
               </a>
             )}
-            <a
-              href={`${VPS}/alpha/doc?news_id=${row.news_id}&ticker=${row.ticker}`}
-              target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            {row.extraction_status === 'complete' && (
+              <a
+                href={`${VPS}/alpha/doc?news_id=${row.news_id}&ticker=${row.ticker}`}
+                target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5"/> Raw MD
+              </a>
+            )}
+            <button
+              onClick={triggerExtract}
+              disabled={extracting}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30
+                disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              <ExternalLink className="w-3.5 h-3.5"/> Raw MD
-            </a>
+              {extracting
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin"/> Extracting…</>
+                : <><Zap className="w-3.5 h-3.5"/> {row.extraction_status === 'complete' ? 'Re-extract' : 'Extract'}</>
+              }
+            </button>
           </div>
+          {extractMsg && (
+            <p className={`text-[11px] mt-1 ${extractMsg.startsWith('Done') ? 'text-emerald-400' : extractMsg.startsWith('Error') ? 'text-red-400' : 'text-amber-400'}`}>
+              {extractMsg}
+            </p>
+          )}
         </div>
       )}
     </div>
