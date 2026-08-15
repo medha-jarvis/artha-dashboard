@@ -225,13 +225,14 @@ def main():
             # rs_52w_percentile: not available in backfill context (no universe-wide rank)
             # Set to None; the daily engine will update it properly on the next run
             metrics["rs_52w_percentile"] = None
+            # Backfill uses daily-based metrics; map to Weinstein stage for DB compat
+            metrics.setdefault("weinstein_stage", "LATE_STAGE_2")
             score, components = compute_stage2_score(metrics)
             if score < 70:
                 continue  # Only store EMERGING and CONFIRMED
 
-            tier      = tier_from_score(score)
-            is_pead   = ticker in pead_set or ns in pead_set
-            is_smd    = (metrics.get("ttm_eps_growth") or 0) < 0 and (metrics.get("volume_multiplier") or 0) >= 3.0
+            tier    = tier_from_score(score)
+            is_pead = ticker in pead_set or ns in pead_set
 
             lifecycle = lifecycle_from_context(
                 score, None, 0,
@@ -240,8 +241,8 @@ def main():
             )
 
             sig_id = upsert_signal(
-                ticker, metrics, score, components, tier, lifecycle,
-                company_name, sector, is_pead, is_smd,
+                ticker, metrics, score, tier, lifecycle,
+                company_name, sector, is_pead,
                 None, "NEUTRAL",
                 target_date.isoformat(), False, None,
                 None,

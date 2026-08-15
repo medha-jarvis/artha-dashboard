@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, AlertCircle, ChevronUp, ChevronDown,
-  Layers, ExternalLink, TrendingUp, TrendingDown, Minus, Star,
+  Layers, ExternalLink, TrendingUp, TrendingDown, Minus,
 } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
@@ -18,31 +18,31 @@ interface Signal {
   sector: string | null;
   signal_date: string;
   entry_date: string | null;
-  stage2_score: number;
-  days_in_stage2: number | null;
-  ema150_distance_pct: number | null;
+  stage2_score: number;            // synthetic: 90/70/40
+  days_in_stage2: number | null;   // = weeks above MA_30W
+  ema150_distance_pct: number | null; // = % distance from MA_30W
   ema150_slope: number | null;
-  above_200sma: boolean | null;
-  above_50sma: boolean | null;
-  sma50_above_ema150: boolean | null;
-  ema150_above_sma200: boolean | null;
-  sma200_slope: number | null;
-  stage2_subtype: string | null;
+  above_200sma: boolean | null;    // = Price > resistance ceiling
+  above_50sma: boolean | null;     // = Price > MA_30W
+  sma50_above_ema150: boolean | null; // = MA_30W slope >= 0
+  ema150_above_sma200: boolean | null; // = Price > EMA_10W
+  sma200_slope: number | null;     // = MA_30W slope value
+  stage2_subtype: string | null;   // = Weinstein stage
   base_20d_distance_pct: number | null;
-  hl_depth_20d: number | null;
-  vol_5d_vs_50d_ratio: number | null;
-  pivot_proximity_pct: number | null;
+  hl_depth_20d: number | null;     // = Minervini VCP depth (daily)
+  vol_5d_vs_50d_ratio: number | null; // = Vol_Ratio_Weekly
+  pivot_proximity_pct: number | null; // = Minervini pivot proximity (daily)
   volume_multiplier: number | null;
   rs_trend: string | null;
-  rs_63d_score: number | null;
+  rs_63d_score: number | null;     // = Mansfield RS
   rs_52w_percentile: number | null;
-  rs_line_new_high: boolean | null;
+  rs_line_new_high: boolean | null; // = is_daily_ma_stacked
   adr_pct: number | null;
   price_52w_position: number | null;
   base_width_weeks: number | null;
   base_count: number | null;
   vcp_score: number | null;
-  vcp_volume_ratio: number | null;
+  vcp_volume_ratio: number | null; // = daily vol/50d ratio (dry-up)
   vcp_adr_ratio: number | null;
   ttm_eps_growth: number | null;
   roce: number | null;
@@ -58,19 +58,16 @@ interface Signal {
   is_reentry: boolean | null;
   returns_since_breakout?: number | null;
   daily_return?: number | null;
-  t_5_return?: number | null;
-  t_20_return?: number | null;
 }
 
 type SortKey =
-  | 'ticker' | 'stage2_score' | 'days_in_stage2' | 'hl_depth_20d'
-  | 'pivot_proximity_pct' | 'vol_5d_vs_50d_ratio' | 'rs_52w_percentile'
-  | 'rs_63d_score' | 'ttm_eps_growth' | 'signal_date' | 'stage2_subtype'
-  | 'returns_since_breakout' | 'daily_return' | 'score_3d_delta'
-  | 'adr_pct' | 'price_52w_position' | 'base_width_weeks' | 'base_count';
+  | 'ticker' | 'stage2_score' | 'days_in_stage2' | 'vol_5d_vs_50d_ratio'
+  | 'rs_63d_score' | 'rs_52w_percentile' | 'ttm_eps_growth' | 'signal_date'
+  | 'stage2_subtype' | 'returns_since_breakout' | 'daily_return' | 'score_3d_delta'
+  | 'sma200_slope' | 'ema150_distance_pct';
 
 type SortDir    = 'asc' | 'desc';
-type FilterMode = 'all' | 'confirmed' | 'emerging' | 'early_stage2' | 'fresh' | 'strengthening' | 'golden_window';
+type FilterMode = 'all' | 'early_s2' | 'late_s2' | 'stage1' | 'fresh' | 'golden_window';
 
 const fmtPct = (v: number | null | undefined, dec = 1) =>
   v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(dec)}%`;
@@ -88,75 +85,51 @@ const retCls = (v: number | null | undefined) =>
 const TIPS: Record<string, { title: string; content: string }> = {
   ticker: {
     title: 'Stock',
-    content: 'NSE ticker symbol with company name. Special badges below the name: PEAD+S2 (post-earnings drift confluence), REENTRY (re-qualified after exit), SMD (smart money divergence — unusual volume without earnings). Click the ticker to open StockScans chart.',
+    content: 'NSE ticker with company name. Badges: PEAD+S2 (post-earnings + Stage 2 confluence), REENTRY (re-qualified after prior exit). Click to open StockScans chart.',
   },
   stage2_subtype: {
-    title: 'Stage 2 Phase',
-    content: 'Where the stock is in its Stage 2 lifecycle — based on % gap between 50 SMA and 200 SMA. EARLY (≤15% gap): just crossed the institutional threshold — maximum upside, lowest macro risk. Best for new positions. MID (15–30% gap): established Stage 2, 2nd or 3rd base still highly actionable. LATE (>30% gap): extended run — bases prone to failure, size down significantly. Always prefer EARLY for initiating new trades.',
+    title: 'Weinstein Stage',
+    content: 'Pure Weinstein stage classification using weekly OHLCV. EARLY STAGE 2A (green): Price just broke above Stage 1 resistance ceiling with volume surge — prime buy alert. LATE STAGE 2B (teal): Established uptrend, price above 10W EMA, MA slope rising — hold or add. STAGE 1 (blue): Basing around flat 30W MA, below resistance — watchlist. STAGE 3 (yellow): MA flattening after extended uptrend — distribution warning. STAGE 4 (red): Price below declining 30W MA — disqualified.',
   },
   lifecycle_state: {
     title: 'Lifecycle State',
-    content: 'CONFIRMED (85+): all 4 knockout conditions met, all additive dimensions strong — active buy zone. SUSTAINED: CONFIRMED for 30+ consecutive days, proven multi-week leader. EMERGING (70–84): building base, add to watchlist. WEAKENING: score dropped >12 pts in 5 days OR price below 50 SMA — tighten stops immediately. EXITED: failed trend knockout or below 150 EMA — Stage 2 is over, exit or reduce position.',
+    content: 'CONFIRMED: Early Stage 2 — active buy zone. SUSTAINED: Late Stage 2 for 30+ weeks — proven trend leader. EMERGING: Late Stage 2 — established trend, hold/add. WEAKENING: Stage dropped from 2 → 1, or topping signals. WATCHING: Stage 1 basing. EXITED: Below 30W MA in decline.',
   },
   stage2_score: {
-    title: 'Score (0–100)',
-    content: 'Weinstein + Minervini rubric v3.0. Five dimensions: (1) Trend Alignment KNOCKOUT 30pts — Price>50SMA>150EMA>200SMA AND 200SMA slope>0; any failure = score 0. (2) Fundamentals 20pts — EPS TTM>0 + accelerating + ROCE>15%. (3) Volatility Contraction 20pts — 20d H-L ≤5% AND volume <50% of 50d avg. (4) Pivot Proximity 15pts — within −5% to +2% of 10-day high. (5) Relative Strength 15pts — 52W rank ≥85 AND 63d RS ≥+10%. Score 85+ = CONFIRMED. 70–84 = EMERGING.',
+    title: 'Stage Score',
+    content: 'Synthetic score for sorting: Early Stage 2 = 90, Late Stage 2 = 70, Stage 1 = 40. The stage label matters more than the number — this is just for ranking within the same stage.',
   },
   score_3d_delta: {
     title: '3-Day Score Change',
-    content: 'Score momentum vs 3 trading days ago. STRENGTHENING (↑, score rose 8+ pts): setup is aligning — signals are confirming each other, consider entering. WEAKENING (↓, dropped 8+ pts): signals deteriorating — trim position or tighten stop-loss. NEUTRAL: stable setup, watch for a decisive move in either direction.',
+    content: 'How the stage score changed over the past 3 trading days. Stage upgrades (+20: Stage 1 → Stage 2) signal the breakout moment. Stage downgrades (−20 to −50) signal distribution or failure.',
   },
-  trend: {
-    title: 'Trend Knockout (4 dots)',
-    content: 'The four conditions that ALL must be green for a stock to qualify. Red dot on ANY = stock fails immediately. Left to right: (1) Price > 50 SMA — intermediate uptrend active. (2) 50 SMA > 150 EMA — moving averages in correct Weinstein order. (3) 150 EMA > 200 SMA — long-term acceleration confirmed. (4) 200 SMA slope > 0 — the macro trend itself is rising; a declining 200 SMA means Stage 4 distribution, not Stage 2. If ANY dot is red, the score is 0 and the stock should NOT be in your watchlist.',
+  wein_conditions: {
+    title: 'Weinstein Conditions (4 dots)',
+    content: 'Four Weinstein conditions, left to right: (1) Price > 30-Week MA — the primary trend is up. (2) 30W MA slope ≥ 0 — MA is flat or curling up (Stage 2 starting or ongoing). (3) Price > 10-Week EMA — short-term momentum is positive. (4) Price > Stage 1 resistance ceiling — the breakout above the basing zone. All four green = textbook Stage 2A. Slope value shown in grey = weekly rate of MA change.',
   },
-  volatility: {
-    title: 'Volatility Contraction (VCP)',
-    content: 'Minervini VCP v3.0. Two metrics: (1) 20-day H-L depth = (highest high − lowest low) / close over 20 days. ≤5% (green): textbook tight coil — full 20 pts. ≤10% (amber): acceptable contraction — 10 pts. >10% (red): loose, choppy base — 0 pts. (2) Volume ratio = 5-day avg vol ÷ 50-day avg vol. <0.5x (green): seller exhaustion confirmed — supply drying up. 0.5–0.75x (amber): drying up. >0.75x (red): still active sellers. Both green together = textbook VCP: price tightening + volume shrinking = coiled spring.',
+  weekly_vol: {
+    title: 'Weekly Volume Ratio',
+    content: 'Current week\'s volume divided by the 30-week average volume. Weinstein requires ≥ 1.5× on the breakout week — this confirms institutional participation. 1.5–2× (green): confirmed breakout volume. 2× + (bold green): exceptionally strong. Below 1× (grey): routine trading, not a breakout week.',
   },
-  adr_pct: {
-    title: 'ADR% — Average Daily Range',
-    content: 'Average of (High − Low) / Close over last 20 trading days, expressed as %. Minervini\'s volatility sizing tool. 3–7% (green): ideal sweet spot — enough daily movement to generate returns, not enough to shake you out on random noise. Below 3% (grey): stock is too slow, won\'t generate meaningful short-term returns. Above 7–10% (amber): elevated volatility. Above 10% (red): too volatile — normal daily swings will trigger your stop-loss randomly. Practical use: risk 1 ADR% below your entry for stop placement.',
+  mansfield_rs: {
+    title: 'Mansfield RS + Percentile',
+    content: 'Mansfield RS = ((stock 52W return / market 52W return) − 1) × 100. Positive = outperforming Nifty Total Market over the past year. +10 or higher (green) = strong leadership. Near 0 = in line with market. Negative = underperformer — avoid buying into weakness. Also shows the cross-universe percentile rank (0–100) for this stock\'s 1-year return vs the full scanned universe.',
   },
-  pivot: {
-    title: 'Entry Zone (Pivot Proximity)',
-    content: '(Close − 10-day High) / 10-day High × 100. Green "In Zone" = within −5% to +2% of the 10-day high — this is the coil, your buy zone. Amber "Near" = −10% to −5%, still watchable, may enter zone soon. Red "Extended" = above +2%, you are chasing — expect to get shaken out on routine dips. Red "Far" = below −10%, base not yet fully formed. Enter only when In Zone AND volume confirms.',
+  weeks_stage: {
+    title: 'Weeks in Stage',
+    content: 'Consecutive weeks the price has been above the 30-Week MA. ≤ 4 weeks (green): fresh breakout — this is the golden window with best risk-reward. 5–20 weeks (amber): established trend, still actionable for 2nd/3rd base entries. 20+ weeks (grey): extended run — be more selective, raise stops. B1/B2/B3 = base number in this Stage 2 cycle.',
   },
-  rs: {
-    title: 'Relative Strength',
-    content: 'Dual-timeframe leadership filter. 52W percentile: where this stock ranks by 1-year return among all qualifying stocks in the universe (0–100). 63d score: % outperformance vs Nifty Total Market over 63 trading days (~3 months). 15 pts: rank ≥85th AND 63d ≥+10% — both must be true (dual leader). 7 pts: rank ≥70th AND 63d ≥+5%. 0 pts: lagging. Target stocks in the top 20% of the universe. A high-RS stock that consolidates while the market is flat is institutions quietly accumulating.',
-  },
-  rs_line_new_high: {
-    title: 'RS Line at New High',
-    content: 'Is the Relative Strength Line (stock price ÷ Nifty Total Market) at a new 52-week high right now? When YES: the stock is outperforming the entire market at its highest rate in over a year. This is the #1 institutional momentum confirmation. When price breaks out AND the RS line simultaneously hits a new high, win rates are significantly higher than breakouts where the RS line is lagging. Weinstein called this "leading the market up." NO means the stock is rising, but the market is rising faster — less conviction.',
-  },
-  price_52w_position: {
-    title: '52-Week Price Position',
-    content: 'Where the current price sits within its 52-week High–Low range. Formula: (Close − 52W Low) / (52W High − 52W Low) × 100. 75–100% (green): Minervini SEPA requirement — must be near 52W highs. Institutions accumulate at new highs, not dips — this is unintuitive but institutional reality. 90–100%: maximum momentum signature — the stock is leading. Below 75% (amber/red): the stock is "broken" relative to its annual range — the setup is premature; wait for recovery to highs.',
+  minervini_radar: {
+    title: 'Minervini Radar (Informational)',
+    content: 'Four Minervini indicators computed from DAILY data — informational context only, not used for stage classification. VCP: 20-day high-low depth; < 5% (green) = textbook tight coil. VD: Volume dry-up (daily vol vs 50d avg); < 0.5× (green) = sellers exhausted. PIV: Distance from 10-day high; −5% to +2% (green) = pivot buy zone. STACK: Price > SMA50 > EMA150 > SMA200 (daily MA alignment — Minervini SEPA criterion). Green badges = positive signal. Amber = partial. Grey = not triggered.',
   },
   fundamentals: {
-    title: 'Fundamental Engine',
-    content: 'EPS TTM = trailing 12-month net profit growth YoY. ↑↑ = accelerating (Q0 YoY > Q1 YoY — Minervini hallmark of a true growth stock). Qtrs = how many consecutive quarters of acceleration. ROCE = Return on Capital Employed (how efficiently the business uses capital). P/E = price-to-earnings (context only, not scored). 20 pts: EPS>0 + accelerating + ROCE>15%. 10 pts: strong EPS OR ROCE>15%. 5 pts: TURN — EPS negative but improving >30% YoY (turnaround tier for pre-profit growth companies). P/E shown as context: high RS + reasonable P/E = institutional sweet spot.',
-  },
-  days_base: {
-    title: 'Stage Duration, Base Analysis',
-    content: 'Three metrics in one cell. Days: consecutive days above 150 EMA — the clock for your Stage 2 thesis. B1/B2/B3 badge: which base number this is in the current Stage 2 run (1st base has highest win rate historically; by 3rd+ base risk of Stage 3 correction increases). Base Width (wks): weeks since the stock last made its 52-week high — how long it has been consolidating. Weinstein requires ≥6 weeks for a quality base. Short bases (2–3 weeks) have higher failure rates. Color: Green ≤15d (golden window — best risk-reward), Amber ≤45d, Grey >45d.',
+    title: 'Fundamental Context',
+    content: 'EPS TTM growth YoY. ↑↑ = accelerating (Q0 > Q1 YoY). ROCE = Return on Capital Employed. P/E = context only. These are displayed alongside Weinstein stage as qualitative context — they do not affect stage classification.',
   },
   returns_since_breakout: {
     title: 'Returns Since Entry',
-    content: 'Left: total return since entry_date (when stock first qualified for Stage 2). Right: today\'s price change. Near 0%: fresh setup, move has barely started — ideal entry window. Already 20–30%+: first leg likely done, wait for new tight base to form before entering. Negative total: breakout is failing — watch for close below 150 EMA as the definitive exit signal (Stage 2 over).',
-  },
-  pead_badge: {
-    title: 'PEAD + Stage 2 Confluence',
-    content: 'Post-Earnings Announcement Drift detected. This stock had a significant positive earnings surprise AND is simultaneously in a Stage 2 setup. Academic research on PEAD shows stocks that gap up sharply on earnings continue drifting higher for 60–90 days as analysts revise estimates upward. When PEAD aligns with Stage 2 technical structure: both the fundamental catalyst AND the technical breakout pattern are in place at the same time. Historically one of the highest-probability setup combinations.',
-  },
-  smd_badge: {
-    title: 'Smart Money Divergence',
-    content: 'Unusual institutional volume (3x+ of 20-day average) is occurring DESPITE negative earnings growth. Smart money (institutional funds) is accumulating BEFORE earnings turn positive — they see something the street hasn\'t priced in. This is a pre-breakout accumulation signal. High risk, high reward: the thesis requires the earnings recovery to materialize. Best used when score ≥75, ROCE >10%, and the buying is concentrated in up-days. Warrants position sizing caution until earnings confirm.',
-  },
-  reentry_badge: {
-    title: 'Re-Entry Signal',
-    content: 'This stock previously dropped below its 150 EMA (exited Stage 2) and has now re-qualified. A re-entry can signal a second chance at a missed move. Re-entries within 20–40 days of the exit with a tighter second base than the first are historically as profitable as the original breakout. Shorter re-entry gaps (stock quickly reclaimed 150 EMA) are more bullish — indicates institutional buying absorbed the correction. Very long gaps (>60 days) or multiple re-entries suggest structural weakness.',
+    content: 'Total return since entry_date. Near 0%: fresh setup, move barely started. 20–30%+: first leg likely done, wait for new base. Negative: breakout failing — watch close below 30W MA as the definitive exit signal.',
   },
 };
 
@@ -167,7 +140,7 @@ function LifecyclePill({ state }: { state: string | null }) {
   const cfg: Record<string, string> = {
     SUSTAINED: 'bg-cyan-900/50 text-cyan-400 border-cyan-700/50',
     CONFIRMED: 'bg-emerald-900/50 text-emerald-400 border-emerald-700/50',
-    EMERGING:  'bg-amber-900/50 text-amber-400 border-amber-700/50',
+    EMERGING:  'bg-teal-900/50 text-teal-400 border-teal-700/50',
     WEAKENING: 'bg-orange-900/50 text-orange-400 border-orange-700/50',
     WATCHING:  'bg-slate-800 text-slate-400 border-slate-700',
     EXITED:    'bg-red-900/50 text-red-400 border-red-700/50',
@@ -179,22 +152,20 @@ function LifecyclePill({ state }: { state: string | null }) {
   );
 }
 
-function StagePill({ subtype, small }: { subtype: string | null; small?: boolean }) {
+function WeinSteinStagePill({ subtype }: { subtype: string | null }) {
   if (!subtype) return null;
-  const cfg: Record<string, string> = {
-    'EARLY STAGE 2': 'bg-emerald-900/40 text-emerald-300 border-emerald-700/50',
-    'MID STAGE 2':   'bg-blue-900/40 text-blue-300 border-blue-700/50',
-    'LATE STAGE 2':  'bg-orange-900/40 text-orange-300 border-orange-700/50',
+  const map: Record<string, { label: string; cls: string }> = {
+    EARLY_STAGE_2:     { label: '2A — BUY SIGNAL', cls: 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50' },
+    LATE_STAGE_2:      { label: '2B — RIDING TREND', cls: 'bg-teal-900/50 text-teal-300 border-teal-700/50' },
+    STAGE_1_BASING:    { label: '1 — WATCHLIST', cls: 'bg-blue-900/50 text-blue-300 border-blue-700/50' },
+    STAGE_3_TOPPING:   { label: '3 — DISTRIBUTION', cls: 'bg-yellow-900/50 text-yellow-300 border-yellow-700/50' },
+    STAGE_4_DECLINING: { label: '4 — DISQUALIFIED', cls: 'bg-red-900/50 text-red-400 border-red-700/50' },
   };
-  const label: Record<string, string> = {
-    'EARLY STAGE 2': 'EARLY',
-    'MID STAGE 2':   'MID',
-    'LATE STAGE 2':  'LATE',
-  };
-  const sz = small ? 'text-[8px] px-1 py-0' : 'text-[9px] px-1.5 py-0.5';
+  const cfg = map[subtype];
+  if (!cfg) return <span className="text-slate-500 text-[9px]">{subtype}</span>;
   return (
-    <span className={`inline-block font-bold rounded border ${sz} ${cfg[subtype] || 'bg-slate-800 text-slate-500 border-slate-700'}`}>
-      {label[subtype] || subtype}
+    <span className={`inline-block text-[8px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${cfg.cls}`}>
+      STAGE {cfg.label}
     </span>
   );
 }
@@ -215,111 +186,202 @@ function ScoreDelta({ delta, trend }: { delta: number | null; trend: string | nu
   return <span className="text-slate-500 text-[10px] flex items-center gap-0.5"><Minus className="w-3 h-3" />{abs}</span>;
 }
 
-function TrendCell({
-  above50, sma50AboveEma150, ema150AboveSma200, sma200Slope,
+function WeinConditionsCell({
+  aboveMa30w, slopePos, aboveEma10w, aboveResistance, slopeVal,
 }: {
-  above50: boolean | null; sma50AboveEma150: boolean | null;
-  ema150AboveSma200: boolean | null; sma200Slope: number | null;
+  aboveMa30w: boolean | null; slopePos: boolean | null;
+  aboveEma10w: boolean | null; aboveResistance: boolean | null;
+  slopeVal: number | null;
 }) {
   const dot = (on: boolean | null, label: string) => (
     <span key={label} title={label}
       className={`w-2 h-2 rounded-full inline-block ${on ? 'bg-emerald-400' : 'bg-red-400/60'}`} />
   );
   return (
-    <div className="flex items-center gap-1">
-      {dot(above50,          'Price > 50 SMA')}
-      {dot(sma50AboveEma150, '50 SMA > 150 EMA')}
-      {dot(ema150AboveSma200,'150 EMA > 200 SMA')}
-      {dot(sma200Slope != null && sma200Slope > 0, '200 SMA slope > 0')}
-    </div>
-  );
-}
-
-function VolatilityCell({ hl, volRatio }: { hl: number | null; volRatio: number | null }) {
-  if (hl == null) return <span className="text-slate-600">—</span>;
-  const hlCls = hl <= 5 ? 'text-emerald-400 font-bold'
-              : hl <= 10 ? 'text-amber-400 font-medium'
-              : 'text-red-400';
-  const volCls = volRatio == null ? 'text-slate-600'
-               : volRatio < 0.5  ? 'text-emerald-400 font-bold'
-               : volRatio < 0.75 ? 'text-amber-400'
-               : 'text-red-400';
-  return (
-    <div className="text-xs">
-      <div className={hlCls}>{hl.toFixed(1)}% HL</div>
-      {volRatio != null && (
-        <div className={`text-[9px] mt-0.5 ${volCls}`}>{volRatio.toFixed(2)}x vol</div>
+    <div className="flex items-center gap-1 flex-wrap">
+      {dot(aboveMa30w,       'Price > 30W MA')}
+      {dot(slopePos,         '30W MA slope ≥ 0 (flat/rising)')}
+      {dot(aboveEma10w,      'Price > 10W EMA')}
+      {dot(aboveResistance,  'Price > Stage 1 resistance ceiling')}
+      {slopeVal != null && (
+        <span className="text-[9px] text-slate-600 ml-0.5">
+          {slopeVal >= 0 ? '+' : ''}{(slopeVal * 100).toFixed(2)}%/wk
+        </span>
       )}
     </div>
   );
 }
 
-function AdrCell({ adr }: { adr: number | null }) {
-  if (adr == null) return <span className="text-slate-600 text-xs">—</span>;
-  const cls = (adr >= 3 && adr <= 7)  ? 'text-emerald-400 font-bold'
-            : (adr >= 2 && adr < 3)   ? 'text-amber-400'
-            : (adr > 7 && adr <= 10)  ? 'text-amber-400'
-            : adr > 10                 ? 'text-red-400'
+function WeeklyVolCell({ volRatio }: { volRatio: number | null }) {
+  if (volRatio == null) return <span className="text-slate-600">—</span>;
+  const cls = volRatio >= 2    ? 'text-emerald-300 font-black'
+            : volRatio >= 1.5  ? 'text-emerald-400 font-bold'
+            : volRatio >= 1.0  ? 'text-slate-300'
             : 'text-slate-500';
-  const label = (adr >= 3 && adr <= 7) ? 'Ideal'
-              : adr < 3 ? 'Slow' : adr > 10 ? 'High' : 'OK';
+  const label = volRatio >= 1.5 ? '✓ Breakout' : volRatio >= 1.0 ? 'Normal' : 'Quiet';
   return (
     <div className="text-xs">
-      <span className={cls}>{adr.toFixed(1)}%</span>
+      <span className={cls}>{volRatio.toFixed(2)}×</span>
       <div className={`text-[9px] mt-0.5 ${cls}`}>{label}</div>
     </div>
   );
 }
 
-function PivotCell({ pct }: { pct: number | null }) {
-  if (pct == null) return <span className="text-slate-600">—</span>;
-  const cls = (pct >= -5 && pct <= 2)  ? 'text-emerald-400 font-bold'
-            : (pct >= -10 && pct < -5)  ? 'text-amber-400 font-medium'
-            : pct > 2                    ? 'text-red-400 font-bold'
-            : 'text-slate-500';
-  const label = (pct >= -5 && pct <= 2)  ? 'In Zone'
-              : (pct >= -10 && pct < -5)  ? 'Near'
-              : pct > 2                    ? 'Extended'
-              : 'Far';
-  return (
-    <div className="text-xs">
-      <span className={cls}>{pct >= 0 ? '+' : ''}{pct.toFixed(1)}%</span>
-      <div className={`text-[9px] mt-0.5 ${cls}`}>{label}</div>
-    </div>
-  );
-}
-
-function RSCell({
-  rs, pct63, pct52w, rsNH, pos52w,
+function MansFieldRSCell({
+  mansfield, pct52w, pos52w,
 }: {
-  rs: string | null; pct63: number | null; pct52w: number | null;
-  rsNH: boolean | null; pos52w: number | null;
+  mansfield: number | null; pct52w: number | null; pos52w: number | null;
 }) {
-  const trendCls = rs === 'Positive' ? 'text-emerald-400' : rs === 'Negative' ? 'text-red-400' : 'text-slate-400';
+  const mrsCls = mansfield == null ? 'text-slate-600'
+               : mansfield > 10    ? 'text-emerald-400 font-bold'
+               : mansfield > 0     ? 'text-emerald-300'
+               : mansfield > -10   ? 'text-amber-400'
+               : 'text-red-400';
   const pct52cls = pct52w == null ? 'text-slate-600'
                  : pct52w >= 85 ? 'text-emerald-400 font-bold'
                  : pct52w >= 70 ? 'text-amber-400'
                  : 'text-slate-500';
-  const pos52cls = pos52w == null ? 'text-slate-600'
-                 : pos52w >= 75 ? 'text-emerald-400'
-                 : pos52w >= 50 ? 'text-amber-400'
-                 : 'text-red-400';
   return (
-    <div className="text-xs space-y-0.5">
+    <div className="text-xs space-y-0.5 text-right">
       {pct52w != null && <div className={pct52cls}>{pct52w}th %ile</div>}
-      {pct63 != null && (
-        <div className={`text-[9px] ${trendCls}`}>
-          63d: {pct63 >= 0 ? '+' : ''}{pct63.toFixed(1)}%
+      {mansfield != null && (
+        <div className={`text-[10px] ${mrsCls}`}>
+          MRS {mansfield >= 0 ? '+' : ''}{mansfield.toFixed(1)}
         </div>
       )}
-      {rsNH && (
-        <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-emerald-400 bg-emerald-900/30 px-1 py-0.5 rounded border border-emerald-700/40">
-          <Star className="w-2 h-2" />RS NH
-        </span>
-      )}
       {pos52w != null && (
-        <div className={`text-[9px] ${pos52cls}`}>52W:{pos52w.toFixed(0)}%</div>
+        <div className={`text-[9px] ${pos52w >= 75 ? 'text-emerald-400' : pos52w >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+          52W: {pos52w.toFixed(0)}%
+        </div>
       )}
+    </div>
+  );
+}
+
+function WeeksStageCell({
+  weeks, entryDate, baseCount,
+}: {
+  weeks: number; entryDate: string | null; baseCount: number | null;
+}) {
+  const wkCls = weeks <= 4  ? 'text-emerald-400 font-bold'
+              : weeks <= 20 ? 'text-amber-400 font-semibold'
+              : 'text-slate-400';
+  const baseCls = baseCount == null ? '' : baseCount === 1 ? 'text-emerald-500'
+                : baseCount === 2 ? 'text-amber-500' : 'text-slate-500';
+  return (
+    <div className="text-xs">
+      <div className="flex items-center gap-1">
+        <span className={wkCls}>{weeks}wk</span>
+        {baseCount != null && (
+          <span className={`text-[8px] font-bold ${baseCls}`}>B{baseCount}</span>
+        )}
+      </div>
+      <div className="text-[9px] text-slate-600 mt-0.5">{fmtDate(entryDate)}</div>
+    </div>
+  );
+}
+
+// Compact chips — live inside the sticky ticker card
+function MinerviniChips({
+  vcpDepth, volRatio, pivotPct, isStacked,
+}: {
+  vcpDepth: number | null; volRatio: number | null;
+  pivotPct: number | null; isStacked: boolean | null;
+}) {
+  type ChipColor = 'green' | 'yellow' | 'gray';
+  const chip = (label: string, color: ChipColor, title: string) => {
+    const cls: Record<ChipColor, string> = {
+      green:  'bg-emerald-950 text-emerald-400 border-emerald-700/60',
+      yellow: 'bg-amber-950 text-amber-400 border-amber-700/50',
+      gray:   'bg-slate-900 text-slate-600 border-slate-700/40',
+    };
+    return (
+      <span key={label} title={title}
+        className={`text-[7px] font-bold px-1 py-[1px] rounded border cursor-help leading-tight ${cls[color]}`}>
+        {label}
+      </span>
+    );
+  };
+
+  const vcpColor: ChipColor = vcpDepth == null ? 'gray'
+                            : vcpDepth <= 6    ? 'green'
+                            : vcpDepth <= 10   ? 'yellow'
+                            : 'gray';
+
+  return (
+    <div className="flex gap-0.5 flex-wrap mt-1">
+      {chip(
+        `VCP${vcpDepth != null ? ` ${vcpDepth.toFixed(0)}%` : ''}`,
+        vcpColor,
+        `VCP depth (20d H-L range): ${vcpDepth?.toFixed(1) ?? '—'}% · ≤6% green, ≤10% yellow`,
+      )}
+      {chip(
+        'VDU',
+        volRatio != null && volRatio < 0.5 ? 'green' : 'gray',
+        `Volume dry-up: daily vol is ${volRatio?.toFixed(2) ?? '—'}× of 50d avg · green if < 0.5× (sellers exhausted)`,
+      )}
+      {chip(
+        `PIV${pivotPct != null ? ` ${pivotPct >= 0 ? '+' : ''}${pivotPct.toFixed(0)}%` : ''}`,
+        pivotPct != null && pivotPct >= -5 && pivotPct <= 2 ? 'green' : 'gray',
+        `Pivot proximity: ${pivotPct?.toFixed(1) ?? '—'}% from 10d high · green if −5% to +2% (buy zone)`,
+      )}
+      {chip(
+        'STACK',
+        isStacked ? 'green' : 'gray',
+        'Daily MA stack: Price > SMA50 > EMA150 > SMA200 · green = Minervini SEPA alignment',
+      )}
+    </div>
+  );
+}
+
+// Full detail badges — live in the dedicated Minervini Radar column
+function MinerviniRadarCell({
+  vcpDepth, volRatio, pivotPct, isStacked,
+}: {
+  vcpDepth: number | null; volRatio: number | null;
+  pivotPct: number | null; isStacked: boolean | null;
+}) {
+  const badge = (text: string, on: boolean, partial: boolean, title: string) => (
+    <span title={title} className={`text-[8px] font-bold px-1 py-0.5 rounded border cursor-help ${
+      on      ? 'bg-emerald-900/50 text-emerald-400 border-emerald-700/50'
+      : partial ? 'bg-amber-900/30 text-amber-400 border-amber-700/30'
+      : 'bg-slate-800/50 text-slate-600 border-slate-700/30'
+    }`}>{text}</span>
+  );
+
+  const vcpGreen   = vcpDepth != null && vcpDepth <= 6;
+  const vcpYellow  = vcpDepth != null && vcpDepth <= 10 && !vcpGreen;
+  const vdGood     = volRatio != null && volRatio < 0.5;
+  const vdPartial  = volRatio != null && volRatio < 0.75 && !vdGood;
+  const pivGood    = pivotPct != null && pivotPct >= -5 && pivotPct <= 2;
+  const pivPartial = pivotPct != null && pivotPct >= -10 && !pivGood;
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex flex-wrap gap-0.5">
+        {badge(
+          `VCP ${vcpDepth != null ? vcpDepth.toFixed(1) + '%' : '—'}`,
+          vcpGreen, vcpYellow,
+          `20d H-L depth: ${vcpDepth?.toFixed(1) ?? '—'}% · ≤6% = tight coil · ≤10% = forming`,
+        )}
+        {badge(
+          `VDU ${volRatio != null ? volRatio.toFixed(2) + '×' : '—'}`,
+          vdGood, vdPartial,
+          `Daily vol / 50d avg: ${volRatio?.toFixed(2) ?? '—'}× · <0.5× = sellers exhausted · <0.75× = drying`,
+        )}
+      </div>
+      <div className="flex flex-wrap gap-0.5">
+        {badge(
+          `PIV ${pivotPct != null ? (pivotPct >= 0 ? '+' : '') + pivotPct.toFixed(1) + '%' : '—'}`,
+          pivGood, pivPartial,
+          `Pivot proximity: ${pivotPct?.toFixed(1) ?? '—'}% from 10d high · −5% to +2% = buy zone`,
+        )}
+        {badge(
+          isStacked ? 'STACK ✓' : 'STACK ✗',
+          !!isStacked, false,
+          'Daily: Price > SMA50 > EMA150 > SMA200 · Minervini SEPA daily alignment',
+        )}
+      </div>
     </div>
   );
 }
@@ -333,18 +395,13 @@ function FundamentalsCell({
   if (eps == null && roce == null) return <span className="text-slate-600">—</span>;
   const epsCls = eps == null ? 'text-slate-600'
                : eps > 0 ? (eps > 20 ? 'text-emerald-400 font-bold' : 'text-emerald-300')
-               : eps > -50 ? 'text-amber-400'
-               : 'text-red-400';
-  const accelIcon = accel ? ' ↑↑' : '';
-  const isTurnaround = eps != null && eps < 0;
+               : eps > -50 ? 'text-amber-400' : 'text-red-400';
   return (
     <div className="text-xs space-y-0.5">
       {eps != null && (
         <div className={epsCls}>
-          EPS {eps >= 0 ? '+' : ''}{eps.toFixed(1)}%{accelIcon}
-          {isTurnaround && (
-            <span className="ml-1 text-[8px] text-amber-500 font-bold">TURN</span>
-          )}
+          EPS {eps >= 0 ? '+' : ''}{eps.toFixed(1)}%{accel ? ' ↑↑' : ''}
+          {eps < 0 && <span className="ml-1 text-[8px] text-amber-500 font-bold">TURN</span>}
         </div>
       )}
       {roce != null && (
@@ -362,37 +419,11 @@ function FundamentalsCell({
   );
 }
 
-function DaysBaseCell({
-  daysLive, entryDate, baseWidthWks, baseCount,
-}: {
-  daysLive: number; entryDate: string | null;
-  baseWidthWks: number | null; baseCount: number | null;
-}) {
-  const dayCls = daysLive <= 15 ? 'text-emerald-400 font-bold'
-               : daysLive <= 45 ? 'text-amber-400 font-semibold'
-               : 'text-slate-400';
-  const baseCls = baseCount == null ? '' : baseCount === 1 ? 'text-emerald-500'
-                : baseCount === 2 ? 'text-amber-500' : 'text-slate-500';
-  const wkCls = baseWidthWks == null ? 'text-slate-600'
-              : baseWidthWks >= 6 ? 'text-emerald-400' : baseWidthWks >= 3 ? 'text-amber-400' : 'text-slate-500';
-  return (
-    <div className="text-xs">
-      <div className="flex items-center gap-1">
-        <span className={dayCls}>{daysLive}d</span>
-        {baseCount != null && (
-          <span className={`text-[8px] font-bold ${baseCls}`}>B{baseCount}</span>
-        )}
-      </div>
-      <div className="text-[9px] text-slate-600 mt-0.5">{fmtDate(entryDate)}</div>
-      {baseWidthWks != null && (
-        <div className={`text-[9px] mt-0.5 ${wkCls}`}>{baseWidthWks}wk base</div>
-      )}
-    </div>
-  );
-}
-
-function ScoreBar({ score }: { score: number }) {
-  const cls = score >= 85 ? 'bg-emerald-500' : score >= 70 ? 'bg-amber-500' : 'bg-slate-600';
+function ScoreBar({ score, subtype }: { score: number; subtype: string | null }) {
+  const cls = subtype === 'EARLY_STAGE_2' ? 'bg-emerald-500'
+            : subtype === 'LATE_STAGE_2'  ? 'bg-teal-500'
+            : subtype === 'STAGE_1_BASING' ? 'bg-blue-600'
+            : 'bg-slate-600';
   return (
     <div className="mt-1 h-1 w-14 bg-slate-800 rounded-full overflow-hidden">
       <div className={`h-full ${cls} rounded-full`} style={{ width: `${Math.min(100, score)}%` }} />
@@ -452,13 +483,11 @@ export default function Stage2Page() {
   const [sortDir,    setSortDir]    = useState<SortDir>('desc');
   const [filter,     setFilter]     = useState<FilterMode>('all');
   const [sectorFilter, setSectorFilter] = useState<string>('all');
-  const [showExited,   setShowExited]   = useState(false);
   const [showHistory,  setShowHistory]  = useState(false);
 
   const loadData = async () => {
     setLoading(true); setError('');
     try {
-      // Primary: active signals (today's run). History mode: last 90 days.
       const sigQuery = showHistory
         ? (() => {
             const c = new Date(); c.setDate(c.getDate() - 90);
@@ -468,7 +497,7 @@ export default function Stage2Page() {
 
       const [rawSigs, rawPerf] = await Promise.all([
         sb(sigQuery),
-        sb('stage2_performance?select=signal_id,returns_since_breakout,daily_return,t_5_return,t_20_return'),
+        sb('stage2_performance?select=signal_id,returns_since_breakout,daily_return'),
       ]);
       if (!Array.isArray(rawSigs)) throw new Error('Bad response');
       const pm: Record<string, Record<string, unknown>> = {};
@@ -479,8 +508,6 @@ export default function Stage2Page() {
         ...s,
         returns_since_breakout: (pm[s.id]?.returns_since_breakout as number) ?? null,
         daily_return:           (pm[s.id]?.daily_return as number) ?? null,
-        t_5_return:             (pm[s.id]?.t_5_return as number) ?? null,
-        t_20_return:            (pm[s.id]?.t_20_return as number) ?? null,
       })));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load');
@@ -502,12 +529,12 @@ export default function Stage2Page() {
       const label = script === 'stage2_tracker' ? 'Return tracker'
                   : script === 'backfill_stage2' ? 'Backfill (7 days)'
                   : 'Stage 2 scan';
-      setTrigMsg(d.ok ? `Dispatched: ${label} (20-30 min)` : `Error: ${d.error}`);
+      setTrigMsg(d.ok ? `Dispatched: ${label} (20–30 min)` : `Error: ${d.error}`);
     } catch { setTrigMsg('Network error'); }
     finally { setTriggering(null); }
   };
 
-  // Deduplicate: one row per ticker (latest signal_date wins) — safety net for history mode
+  // Deduplicate: one row per ticker (latest signal_date wins)
   const deduplicated = useMemo(() => {
     const map = new Map<string, Signal>();
     for (const sig of signals) {
@@ -517,38 +544,31 @@ export default function Stage2Page() {
     return Array.from(map.values());
   }, [signals]);
 
-  // Derive unique sectors
   const sectors = useMemo(() => {
     const s = new Set(deduplicated.map(sig => sig.sector).filter((x): x is string => !!x));
     return Array.from(s).sort();
   }, [deduplicated]);
 
-  const daysLive = (s: Signal) =>
-    s.days_in_stage2 ?? Math.floor(
-      (Date.now() - new Date((s.entry_date || s.signal_date) + 'T00:00:00').getTime()) / 86400000
-    );
+  const weeksInStage = (s: Signal) => s.days_in_stage2 ?? 0;
 
-  // Filter: EXITED + sector
+  // Sector filter
   const baseFiltered = useMemo(() => {
     let result = deduplicated;
-    if (!showExited) result = result.filter(s => s.lifecycle_state !== 'EXITED');
     if (sectorFilter !== 'all') result = result.filter(s => s.sector === sectorFilter);
     return result;
-  }, [deduplicated, showExited, sectorFilter]);
+  }, [deduplicated, sectorFilter]);
 
   // Mode filter
   const modeFiltered = useMemo(() => {
     switch (filter) {
-      case 'confirmed':    return baseFiltered.filter(s => s.stage2_score >= 85);
-      case 'emerging':     return baseFiltered.filter(s => s.stage2_score >= 70 && s.stage2_score < 85);
-      case 'early_stage2': return baseFiltered.filter(s => s.stage2_subtype === 'EARLY STAGE 2');
-      case 'fresh':        return baseFiltered.filter(s => daysLive(s) <= 15);
-      case 'strengthening':return baseFiltered.filter(s => s.score_trend === 'STRENGTHENING');
+      case 'early_s2':     return baseFiltered.filter(s => s.stage2_subtype === 'EARLY_STAGE_2');
+      case 'late_s2':      return baseFiltered.filter(s => s.stage2_subtype === 'LATE_STAGE_2');
+      case 'stage1':       return baseFiltered.filter(s => s.stage2_subtype === 'STAGE_1_BASING');
+      case 'fresh':        return baseFiltered.filter(s => weeksInStage(s) <= 4);
       case 'golden_window':return baseFiltered.filter(s =>
-        s.stage2_subtype === 'EARLY STAGE 2' &&
-        daysLive(s) <= 21 &&
-        s.stage2_score >= 80 &&
-        (s.rs_52w_percentile ?? 0) >= 80
+        s.stage2_subtype === 'EARLY_STAGE_2' &&
+        weeksInStage(s) <= 4 &&
+        (s.rs_52w_percentile ?? 0) >= 50
       );
       default: return baseFiltered;
     }
@@ -560,11 +580,14 @@ export default function Stage2Page() {
       const d = sortDir === 'desc' ? -1 : 1;
       if (sortKey === 'ticker')         return d * a.ticker.localeCompare(b.ticker);
       if (sortKey === 'stage2_subtype') {
-        const order: Record<string, number> = { 'EARLY STAGE 2': 0, 'MID STAGE 2': 1, 'LATE STAGE 2': 2 };
-        return d * ((order[a.stage2_subtype || ''] ?? 3) - (order[b.stage2_subtype || ''] ?? 3));
+        const order: Record<string, number> = {
+          EARLY_STAGE_2: 0, LATE_STAGE_2: 1, STAGE_1_BASING: 2,
+          STAGE_3_TOPPING: 3, STAGE_4_DECLINING: 4,
+        };
+        return d * ((order[a.stage2_subtype || ''] ?? 5) - (order[b.stage2_subtype || ''] ?? 5));
       }
       if (sortKey === 'signal_date')    return d * a.signal_date.localeCompare(b.signal_date);
-      if (sortKey === 'days_in_stage2') return d * (daysLive(a) - daysLive(b));
+      if (sortKey === 'days_in_stage2') return d * (weeksInStage(a) - weeksInStage(b));
       const nf = sortDir === 'desc' ? -Infinity : Infinity;
       const va = (a[sortKey as keyof Signal] as number | null) ?? nf;
       const vb = (b[sortKey as keyof Signal] as number | null) ?? nf;
@@ -578,13 +601,13 @@ export default function Stage2Page() {
   };
 
   // Stats
-  const confirmed     = baseFiltered.filter(s => s.stage2_score >= 85).length;
-  const sustained     = baseFiltered.filter(s => s.lifecycle_state === 'SUSTAINED').length;
-  const emerging      = baseFiltered.filter(s => s.stage2_score >= 70 && s.stage2_score < 85).length;
-  const earlys2       = baseFiltered.filter(s => s.stage2_subtype === 'EARLY STAGE 2').length;
-  const strengthening = baseFiltered.filter(s => s.score_trend === 'STRENGTHENING').length;
-  const rsNHCount     = baseFiltered.filter(s => s.rs_line_new_high).length;
-  const avgReturn     = (() => {
+  const earlyS2    = baseFiltered.filter(s => s.stage2_subtype === 'EARLY_STAGE_2').length;
+  const lateS2     = baseFiltered.filter(s => s.stage2_subtype === 'LATE_STAGE_2').length;
+  const stage1cnt  = baseFiltered.filter(s => s.stage2_subtype === 'STAGE_1_BASING').length;
+  const freshCnt   = baseFiltered.filter(s => weeksInStage(s) <= 4).length;
+  const rsLeaders  = baseFiltered.filter(s => (s.rs_63d_score ?? 0) >= 10).length;
+  const stacked    = baseFiltered.filter(s => s.rs_line_new_high).length;
+  const avgReturn  = (() => {
     const v = baseFiltered.map(s => s.returns_since_breakout).filter((x): x is number => x != null);
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
   })();
@@ -594,25 +617,24 @@ export default function Stage2Page() {
 
   return (
     <div className="min-h-screen bg-[#0d1117] p-3 md:p-5">
-      <div className="max-w-[2000px] mx-auto space-y-4">
+      <div className="max-w-[2200px] mx-auto space-y-4">
 
         {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Link href="/" className="text-slate-500 hover:text-slate-300"><ArrowLeft className="w-4 h-4" /></Link>
-              <Layers className="w-5 h-5 text-blue-400" />
+              <Layers className="w-5 h-5 text-emerald-400" />
               <h1 className="text-lg font-black text-white">Stage 2 Intelligence Hub</h1>
-              <span className="text-[10px] bg-blue-900/50 text-blue-400 border border-blue-700/40 px-1.5 py-0.5 rounded font-bold">v3.1</span>
+              <span className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-700/40 px-1.5 py-0.5 rounded font-bold">v4.0</span>
             </div>
             <p className="text-xs text-slate-500 ml-11">
-              Weinstein + Minervini · Knockout 30 + Funda 20 + VCP 20 + Pivot 15 + RS 15 ·
-              CONFIRMED≥85 · ~700 universe · Click headers to sort
+              Pure Weinstein · Weekly OHLCV · Mansfield RS · Minervini as Radar Only · Click headers to sort
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={() => dispatch('stage2_engine')} disabled={!!triggering}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold disabled:opacity-50 transition">
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-semibold disabled:opacity-50 transition">
               <Layers className={`w-3.5 h-3.5 ${triggering === 'stage2_engine' ? 'animate-pulse' : ''}`} />
               Run Scan
             </button>
@@ -649,13 +671,13 @@ export default function Stage2Page() {
         {deduplicated.length > 0 && (
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-2">
             {[
-              { l: 'Confirmed (85+)', v: confirmed.toString(),     c: 'text-emerald-400' },
-              { l: 'Sustained',       v: sustained.toString(),     c: 'text-cyan-400' },
-              { l: 'Emerging (70–84)',v: emerging.toString(),      c: 'text-amber-400' },
-              { l: 'Early Stage 2',   v: earlys2.toString(),       c: 'text-emerald-300' },
-              { l: 'Strengthening',   v: strengthening.toString(), c: 'text-blue-400' },
-              { l: 'RS Line NH',      v: rsNHCount.toString(),     c: 'text-emerald-400' },
-              { l: 'Avg Return',      v: fmtPct(avgReturn),        c: retCls(avgReturn) },
+              { l: 'Stage 2A (Buy)',    v: earlyS2.toString(),   c: 'text-emerald-400' },
+              { l: 'Stage 2B (Trend)',  v: lateS2.toString(),    c: 'text-teal-400' },
+              { l: 'Stage 1 (Watch)',   v: stage1cnt.toString(), c: 'text-blue-400' },
+              { l: 'Fresh (≤4wk)',      v: freshCnt.toString(),  c: 'text-amber-400' },
+              { l: 'RS Leaders (MRS10+)', v: rsLeaders.toString(), c: 'text-emerald-300' },
+              { l: 'Radar: STACK',      v: stacked.toString(),   c: 'text-cyan-400' },
+              { l: 'Avg Return',        v: fmtPct(avgReturn),    c: retCls(avgReturn) },
             ].map(s => (
               <div key={s.l} className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
                 <div className="text-[10px] text-slate-500 mb-1">{s.l}</div>
@@ -668,13 +690,12 @@ export default function Stage2Page() {
         {/* Rubric legend */}
         <div className="flex flex-wrap gap-2 text-[9px]">
           {[
-            { l: 'Trend KNOCKOUT', v: '30', c: 'bg-blue-900/30 border-blue-700/30 text-blue-300' },
-            { l: 'Fundamental',    v: '20', c: 'bg-emerald-900/30 border-emerald-700/30 text-emerald-300' },
-            { l: 'VCP/Volatility', v: '20', c: 'bg-violet-900/30 border-violet-700/30 text-violet-300' },
-            { l: 'Pivot Proximity',v: '15', c: 'bg-amber-900/30 border-amber-700/30 text-amber-300' },
-            { l: 'Rel. Strength',  v: '15', c: 'bg-cyan-900/30 border-cyan-700/30 text-cyan-300' },
-            { l: 'CONFIRMED ≥85',  v: '✓',  c: 'bg-emerald-900/40 border-emerald-700/40 text-emerald-400' },
-            { l: 'EMERGING 70–84', v: '~',  c: 'bg-amber-900/40 border-amber-700/40 text-amber-400' },
+            { l: 'Stage 2A',       v: 'BUY',     c: 'bg-emerald-900/30 border-emerald-700/30 text-emerald-300' },
+            { l: 'Stage 2B',       v: 'TREND',   c: 'bg-teal-900/30 border-teal-700/30 text-teal-300' },
+            { l: 'Stage 1',        v: 'WATCH',   c: 'bg-blue-900/30 border-blue-700/30 text-blue-300' },
+            { l: 'Minervini',      v: 'Radar',   c: 'bg-violet-900/30 border-violet-700/30 text-violet-300' },
+            { l: 'Mansfield RS',   v: 'MRS>0',   c: 'bg-cyan-900/30 border-cyan-700/30 text-cyan-300' },
+            { l: 'Weekly',         v: 'OHLCV',   c: 'bg-slate-800/60 border-slate-700/40 text-slate-400' },
           ].map(b => (
             <span key={b.l} className={`inline-flex items-center gap-1 px-2 py-1 rounded border font-bold ${b.c}`}>
               <span className="opacity-60">{b.l}</span> {b.v}
@@ -684,59 +705,52 @@ export default function Stage2Page() {
 
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-3">
-          {/* Filter mode */}
           <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-1 gap-1 flex-wrap">
             {([
               ['all',           'All'],
-              ['confirmed',     'Confirmed (85+)'],
-              ['emerging',      'Emerging (70–84)'],
-              ['early_stage2',  'Early S2'],
-              ['fresh',         'Fresh (≤15d)'],
-              ['strengthening', 'Strengthening'],
+              ['early_s2',      '🟢 Stage 2A (Buy)'],
+              ['late_s2',       '🔵 Stage 2B (Trend)'],
+              ['stage1',        '⚪ Stage 1 (Watch)'],
+              ['fresh',         'Fresh (≤4wk)'],
               ['golden_window', '⭐ Golden Window'],
             ] as [FilterMode, string][]).map(([v, l]) => (
               <button key={v} onClick={() => setFilter(v)}
                 className={`px-3 py-1 text-xs rounded font-medium transition whitespace-nowrap ${
                   filter === v
-                    ? v === 'golden_window' ? 'bg-amber-600 text-white' : 'bg-blue-600 text-white'
+                    ? v === 'golden_window' ? 'bg-amber-600 text-white'
+                    : v === 'early_s2' ? 'bg-emerald-700 text-white'
+                    : v === 'late_s2'  ? 'bg-teal-700 text-white'
+                    : v === 'stage1'   ? 'bg-blue-700 text-white'
+                    : 'bg-blue-600 text-white'
                     : 'text-slate-400 hover:text-white'
                 }`}>{l}</button>
             ))}
           </div>
 
-          {/* Sector */}
           {sectors.length > 0 && (
             <select
               value={sectorFilter}
               onChange={e => setSectorFilter(e.target.value)}
-              className="bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-600"
+              className="bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-emerald-600"
             >
               <option value="all">All Sectors</option>
               {sectors.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           )}
 
-          {/* Toggles */}
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
-              <input type="checkbox" checked={showExited} onChange={e => setShowExited(e.target.checked)}
-                className="w-3 h-3 rounded accent-orange-500" />
-              Show Exited
-            </label>
-            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
-              <input type="checkbox" checked={showHistory} onChange={e => setShowHistory(e.target.checked)}
-                className="w-3 h-3 rounded accent-slate-500" />
-              History Mode (90d)
-            </label>
-          </div>
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
+            <input type="checkbox" checked={showHistory} onChange={e => setShowHistory(e.target.checked)}
+              className="w-3 h-3 rounded accent-slate-500" />
+            History Mode (90d)
+          </label>
 
           <span className="text-slate-600 text-xs">{sorted.length} setups · {deduplicated.length} unique</span>
         </div>
 
         {filter === 'golden_window' && (
           <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg px-4 py-2 text-xs text-amber-300">
-            <span className="font-bold">Golden Window:</span> EARLY Stage 2 · ≤21 days in stage · Score ≥80 · RS ≥80th percentile.
-            These are the top-tier setups with the best risk-reward profile.
+            <span className="font-bold">Golden Window:</span> Early Stage 2A · ≤ 4 weeks since breakout · Mansfield RS 50th+ percentile.
+            This is the highest probability entry window — fresh breakout with relative strength confirming leadership.
           </div>
         )}
 
@@ -754,7 +768,7 @@ export default function Stage2Page() {
               <button onClick={() => dispatch('backfill_stage2')} disabled={!!triggering}
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-medium disabled:opacity-50">Seed 7 Days</button>
               <button onClick={() => dispatch('stage2_engine')} disabled={!!triggering}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50">Run Scan</button>
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium disabled:opacity-50">Run Scan</button>
             </div>
           </div>
         ) : (
@@ -763,56 +777,36 @@ export default function Stage2Page() {
               <table className="w-full text-xs border-collapse" style={{ minWidth: '1600px' }}>
                 <thead className="sticky top-0 z-20">
                   <tr className="bg-[#161b22] border-b-2 border-slate-700">
-                    {/* Sticky: Stock */}
-                    <Th col="ticker"        label="Stock"      sticky active={sortKey==='ticker'}               dir={sortDir} onSort={onSort} tipKey="ticker" />
-                    {/* Phase (sub-stage) */}
-                    <Th col="stage2_subtype" label="Phase"     active={sortKey==='stage2_subtype'}              dir={sortDir} onSort={onSort} tipKey="stage2_subtype" />
-                    {/* Lifecycle */}
-                    <ThStatic label="State" tipKey="lifecycle_state" />
-                    {/* Score */}
-                    <Th col="stage2_score"  label="Score"      active={sortKey==='stage2_score'}                dir={sortDir} onSort={onSort} tipKey="stage2_score" />
-                    {/* 3d momentum */}
-                    <Th col="score_3d_delta" label="3d Δ"      active={sortKey==='score_3d_delta'}              dir={sortDir} onSort={onSort} tipKey="score_3d_delta" />
-                    {/* Knockout dots */}
-                    <ThStatic label="Trend ×4" tipKey="trend" />
-                    {/* VCP */}
-                    <Th col="hl_depth_20d"  label="VCP"        active={sortKey==='hl_depth_20d'}                dir={sortDir} onSort={onSort} tipKey="volatility" />
-                    {/* ADR */}
-                    <Th col="adr_pct"       label="ADR%"       active={sortKey==='adr_pct'}                     dir={sortDir} onSort={onSort} tipKey="adr_pct" />
-                    {/* Pivot */}
-                    <Th col="pivot_proximity_pct" label="Entry Zone" active={sortKey==='pivot_proximity_pct'}   dir={sortDir} onSort={onSort} tipKey="pivot" />
-                    {/* RS (includes NH + 52W pos inside cell) */}
-                    <Th col="rs_52w_percentile" label="RS"     active={sortKey==='rs_52w_percentile'}           dir={sortDir} onSort={onSort} right tipKey="rs" />
-                    {/* Fundamentals */}
-                    <Th col="ttm_eps_growth" label="Funda"     active={sortKey==='ttm_eps_growth'}              dir={sortDir} onSort={onSort} tipKey="fundamentals" />
-                    {/* Days + base analysis */}
-                    <Th col="days_in_stage2" label="Days/Base" active={sortKey==='days_in_stage2'}              dir={sortDir} onSort={onSort} tipKey="days_base" />
-                    {/* Return */}
-                    <Th col="returns_since_breakout" label="Return" active={sortKey==='returns_since_breakout'} dir={sortDir} onSort={onSort} right tipKey="returns_since_breakout" />
-                    {/* Charts */}
+                    <Th col="ticker"          label="Stock"         sticky active={sortKey==='ticker'}              dir={sortDir} onSort={onSort} tipKey="ticker" />
+                    <Th col="stage2_subtype"  label="Stage"         active={sortKey==='stage2_subtype'}            dir={sortDir} onSort={onSort} tipKey="stage2_subtype" />
+                    <ThStatic label="State"  tipKey="lifecycle_state" />
+                    <Th col="stage2_score"    label="Score"         active={sortKey==='stage2_score'}              dir={sortDir} onSort={onSort} tipKey="stage2_score" />
+                    <Th col="score_3d_delta"  label="3d Δ"          active={sortKey==='score_3d_delta'}            dir={sortDir} onSort={onSort} tipKey="score_3d_delta" />
+                    <ThStatic label="Conditions ×4" tipKey="wein_conditions" />
+                    <Th col="vol_5d_vs_50d_ratio" label="Weekly Vol" active={sortKey==='vol_5d_vs_50d_ratio'}      dir={sortDir} onSort={onSort} tipKey="weekly_vol" />
+                    <Th col="rs_52w_percentile" label="Mansfield RS" right active={sortKey==='rs_52w_percentile'}  dir={sortDir} onSort={onSort} tipKey="mansfield_rs" />
+                    <Th col="days_in_stage2"  label="Weeks/Stage"   active={sortKey==='days_in_stage2'}            dir={sortDir} onSort={onSort} tipKey="weeks_stage" />
+                    <ThStatic label="Minervini Radar" tipKey="minervini_radar" />
+                    <Th col="ttm_eps_growth"  label="Funda"         active={sortKey==='ttm_eps_growth'}            dir={sortDir} onSort={onSort} tipKey="fundamentals" />
+                    <Th col="returns_since_breakout" label="Return" right active={sortKey==='returns_since_breakout'} dir={sortDir} onSort={onSort} tipKey="returns_since_breakout" />
                     <ThStatic label="Charts" />
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.map(sig => {
-                    const s   = sig.stage2_score;
-                    const lc  = sig.lifecycle_state || 'WATCHING';
-                    const sym = sig.ticker.replace(/\.NS$/i, '');
-                    const dl  = daysLive(sig);
+                    const stage = sig.stage2_subtype || '';
+                    const lc    = sig.lifecycle_state || 'WATCHING';
+                    const sym   = sig.ticker.replace(/\.NS$/i, '');
 
-                    const rowBg = lc === 'SUSTAINED' ? 'bg-cyan-950/15 hover:bg-cyan-950/30'
-                                : lc === 'CONFIRMED' ? 'bg-emerald-950/15 hover:bg-emerald-950/30'
-                                : lc === 'EMERGING'  ? 'bg-amber-950/10 hover:bg-amber-950/20'
-                                : lc === 'WEAKENING' ? 'bg-orange-950/15 hover:bg-orange-950/30'
-                                : lc === 'EXITED'    ? 'bg-red-950/10 hover:bg-red-950/20 opacity-70'
+                    const rowBg = stage === 'EARLY_STAGE_2'  ? 'bg-emerald-950/20 hover:bg-emerald-950/35'
+                                : stage === 'LATE_STAGE_2'   ? 'bg-teal-950/15 hover:bg-teal-950/25'
+                                : stage === 'STAGE_1_BASING' ? 'bg-blue-950/10 hover:bg-blue-950/20'
+                                : lc === 'WEAKENING'         ? 'bg-orange-950/15 hover:bg-orange-950/30'
                                 : 'hover:bg-slate-800/20';
 
-                    // Solid bg for sticky cell (must match row bg)
-                    const stkBg = lc === 'SUSTAINED' ? '#030f0f'
-                                : lc === 'CONFIRMED' ? '#061209'
-                                : lc === 'EMERGING'  ? '#0d0d00'
-                                : lc === 'WEAKENING' ? '#120800'
-                                : lc === 'EXITED'    ? '#120303'
+                    const stkBg = stage === 'EARLY_STAGE_2'  ? '#030f07'
+                                : stage === 'LATE_STAGE_2'   ? '#03100f'
+                                : stage === 'STAGE_1_BASING' ? '#040815'
                                 : '#0d1117';
 
                     return (
@@ -822,10 +816,16 @@ export default function Stage2Page() {
                         <td className="px-3 py-2 whitespace-nowrap sticky left-0 z-10"
                             style={{ backgroundColor: stkBg }}>
                           <a href={stockScansUrl(sig.ticker)} target="_blank" rel="noopener noreferrer"
-                            className="font-bold text-white hover:text-blue-400 transition-colors text-sm">{sym}</a>
+                            className="font-bold text-white hover:text-emerald-400 transition-colors text-sm">{sym}</a>
                           {sig.company_name && (
-                            <div className="text-slate-500 text-[10px] truncate max-w-[120px]">{sig.company_name}</div>
+                            <div className="text-slate-500 text-[10px] truncate max-w-[130px]">{sig.company_name}</div>
                           )}
+                          <MinerviniChips
+                            vcpDepth={sig.hl_depth_20d}
+                            volRatio={sig.vcp_volume_ratio}
+                            pivotPct={sig.pivot_proximity_pct}
+                            isStacked={sig.rs_line_new_high}
+                          />
                           <div className="flex gap-1 mt-0.5 flex-wrap">
                             {sig.is_pead_confluence && (
                               <span title="PEAD + Stage 2 confluence"
@@ -839,18 +839,12 @@ export default function Stage2Page() {
                                 REENTRY
                               </span>
                             )}
-                            {sig.is_smart_money_divergence && (
-                              <span title="Smart Money Divergence"
-                                className="text-[8px] font-bold bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 px-1 py-0.5 rounded cursor-help">
-                                SMD
-                              </span>
-                            )}
                           </div>
                         </td>
 
-                        {/* Phase */}
+                        {/* Stage */}
                         <td className="px-2 py-2 whitespace-nowrap">
-                          <StagePill subtype={sig.stage2_subtype} />
+                          <WeinSteinStagePill subtype={sig.stage2_subtype} />
                         </td>
 
                         {/* Lifecycle state */}
@@ -862,13 +856,12 @@ export default function Stage2Page() {
                         <td className="px-2 py-2 whitespace-nowrap">
                           <div>
                             <span className={`text-base font-black ${
-                              s >= 85 ? 'text-emerald-400' : s >= 70 ? 'text-amber-400' : 'text-slate-500'
-                            }`}>{s}</span>
-                            <span className={`ml-1 text-[9px] font-bold ${
-                              s >= 85 ? 'text-emerald-600' : s >= 70 ? 'text-amber-600' : 'text-slate-600'
-                            }`}>{s >= 85 ? 'A+' : s >= 70 ? '~' : 'PASS'}</span>
+                              stage === 'EARLY_STAGE_2' ? 'text-emerald-400'
+                              : stage === 'LATE_STAGE_2' ? 'text-teal-400'
+                              : 'text-blue-400'
+                            }`}>{sig.stage2_score}</span>
                           </div>
-                          <ScoreBar score={s} />
+                          <ScoreBar score={sig.stage2_score} subtype={sig.stage2_subtype} />
                         </td>
 
                         {/* 3d delta */}
@@ -876,42 +869,47 @@ export default function Stage2Page() {
                           <ScoreDelta delta={sig.score_3d_delta} trend={sig.score_trend} />
                         </td>
 
-                        {/* Trend 4-dots */}
+                        {/* Weinstein conditions 4-dot */}
                         <td className="px-2 py-2 whitespace-nowrap">
-                          <TrendCell
-                            above50={sig.above_50sma}
-                            sma50AboveEma150={sig.sma50_above_ema150}
-                            ema150AboveSma200={sig.ema150_above_sma200}
-                            sma200Slope={sig.sma200_slope}
+                          <WeinConditionsCell
+                            aboveMa30w={sig.above_50sma}
+                            slopePos={sig.sma50_above_ema150}
+                            aboveEma10w={sig.ema150_above_sma200}
+                            aboveResistance={sig.above_200sma}
+                            slopeVal={sig.sma200_slope}
                           />
-                          {sig.sma200_slope != null && (
-                            <div className="text-[9px] text-slate-600 mt-0.5">
-                              200SMA {sig.sma200_slope >= 0 ? '+' : ''}{sig.sma200_slope.toFixed(2)}%
-                            </div>
-                          )}
                         </td>
 
-                        {/* VCP */}
+                        {/* Weekly vol ratio */}
                         <td className="px-2 py-2 whitespace-nowrap">
-                          <VolatilityCell hl={sig.hl_depth_20d} volRatio={sig.vol_5d_vs_50d_ratio} />
+                          <WeeklyVolCell volRatio={sig.vol_5d_vs_50d_ratio} />
                         </td>
 
-                        {/* ADR% */}
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <AdrCell adr={sig.adr_pct} />
-                        </td>
-
-                        {/* Entry Zone */}
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <PivotCell pct={sig.pivot_proximity_pct} />
-                        </td>
-
-                        {/* RS */}
+                        {/* Mansfield RS */}
                         <td className="px-2 py-2 text-right whitespace-nowrap">
-                          <RSCell
-                            rs={sig.rs_trend} pct63={sig.rs_63d_score}
-                            pct52w={sig.rs_52w_percentile} rsNH={sig.rs_line_new_high}
+                          <MansFieldRSCell
+                            mansfield={sig.rs_63d_score}
+                            pct52w={sig.rs_52w_percentile}
                             pos52w={sig.price_52w_position}
+                          />
+                        </td>
+
+                        {/* Weeks in stage */}
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <WeeksStageCell
+                            weeks={sig.days_in_stage2 ?? 0}
+                            entryDate={sig.entry_date || sig.signal_date}
+                            baseCount={sig.base_count}
+                          />
+                        </td>
+
+                        {/* Minervini Radar */}
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <MinerviniRadarCell
+                            vcpDepth={sig.hl_depth_20d}
+                            volRatio={sig.vcp_volume_ratio}
+                            pivotPct={sig.pivot_proximity_pct}
+                            isStacked={sig.rs_line_new_high}
                           />
                         </td>
 
@@ -921,14 +919,6 @@ export default function Stage2Page() {
                             eps={sig.ttm_eps_growth} roce={sig.roce}
                             accel={sig.eps_is_accelerating} accelQtrs={sig.eps_acceleration_quarters}
                             pe={sig.pe_ratio}
-                          />
-                        </td>
-
-                        {/* Days + Base */}
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <DaysBaseCell
-                            daysLive={dl} entryDate={sig.entry_date || sig.signal_date}
-                            baseWidthWks={sig.base_width_weeks} baseCount={sig.base_count}
                           />
                         </td>
 
@@ -947,7 +937,7 @@ export default function Stage2Page() {
                           <div className="flex items-center justify-center gap-1">
                             <a href={stockScansUrl(sig.ticker)} target="_blank" rel="noopener noreferrer"
                               title="StockScans chart"
-                              className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded border border-slate-700 hover:border-blue-500 font-medium">
+                              className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-emerald-400 transition-colors px-1.5 py-0.5 rounded border border-slate-700 hover:border-emerald-500 font-medium">
                               <ExternalLink className="w-2.5 h-2.5" />SS
                             </a>
                             <a href={tradingViewUrl(sig.ticker)} target="_blank" rel="noopener noreferrer"
@@ -965,9 +955,9 @@ export default function Stage2Page() {
             </div>
             <div className="px-4 py-2 border-t border-slate-800 flex flex-wrap justify-between gap-2 text-[10px] text-slate-600">
               <span>
-                {sorted.length} setups · {deduplicated.length} unique · v3.1 Weinstein+Minervini · CONFIRMED≥85 · ~700 universe
+                {sorted.length} setups · {deduplicated.length} unique · v4.0 Pure Weinstein · Weekly OHLCV · Minervini = Radar Only
               </span>
-              <span>Click column headers to sort · SS=StockScans · TV=TradingView · Badges: hover for tooltip</span>
+              <span>SS=StockScans · TV=TradingView · Hover badges for details · Click column to sort</span>
             </div>
           </div>
         )}

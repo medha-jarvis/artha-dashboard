@@ -1,41 +1,39 @@
 """
-Stage 2 Intelligence Engine v3.0 — Weinstein + Minervini Revised Rubric
-=========================================================================
-100-point scoring across 5 dimensions:
+Stage 2 Intelligence Engine v4.0 — Pure Weinstein Stage Classification
+========================================================================
+Primary Dataset  : Weekly OHLCV (Friday close)
+Secondary Dataset: Daily OHLCV (Minervini radar badges only — informational)
+Benchmark        : Nifty Total Market weekly (Mansfield RS)
 
-  1. Trend Alignment      KNOCKOUT  30 pts — Price > 50SMA > 150EMA > 200SMA AND 200SMA slope > 0
-  2. Fundamental Engine   ADDITIVE  20 pts — EPS TTM > 0, Accelerating (Q0 YoY > Q1 YoY), ROCE > 15%
-  3. Volatility Contract  ADDITIVE  20 pts — 20d H-L depth ≤5% AND 5d-vol < 50% of 50d-vol-avg
-  4. Pivot Proximity      ADDITIVE  15 pts — Within -5% to +2% of 10-day High
-  5. Relative Strength    ADDITIVE  15 pts — 52W rank ≥85 AND 63d RS ≥+10%
+Weinstein Stage Classification:
+  EARLY_STAGE_2    : Prime Buy Alert — breakout + volume surge + Mansfield RS
+  LATE_STAGE_2     : Hold/Add — established uptrend above EMA_10W
+  STAGE_1_BASING   : Watchlist — basing around flat MA_30W
+  STAGE_3_TOPPING  : Warning — MA_30W flattening after extended uptrend
+  STAGE_4_DECLINING: Disqualified — price below declining MA_30W
 
-Score thresholds:
-  85-100 → CONFIRMED (A+ Super-Performer)
-  70-84  → EMERGING  (Watchlist - Building Base)
-  60-69  → WATCHING  (Signals forming, not ready)
-  <60    → PASS      (Do Not Trade — not stored)
+Minervini Radar (informational only, daily data):
+  vcp_depth_20d_pct  : (Max_H_20d - Min_L_20d) / Max_H_20d
+  is_volume_dry_up   : Daily Vol < 0.5x SMA(Vol, 50d)
+  pivot_proximity_pct: (Close - Max_H_10d) / Max_H_10d
+  is_daily_ma_stacked: Price > SMA(50) > EMA(150) > SMA(200)
 
-Stage sub-type (50SMA vs 200SMA gap):
-  ≤15%   → EARLY STAGE 2  (just crossed; max upside, lowest macro risk)
-  15-30% → MID STAGE 2    (established; 2nd/3rd base; still highly actionable)
-  >30%   → LATE STAGE 2   (extended; bases prone to failure; tighten stops)
-
-Lifecycle states (revised thresholds vs v2.1):
-  CONFIRMED  : score ≥85, all knockout conditions met
-  SUSTAINED  : CONFIRMED for 30+ consecutive days (proven multi-week leader)
-  EMERGING   : score 70-84 (watchlist, building base)
-  WATCHING   : score 60-69 (close to qualifying, not ready yet)
-  WEAKENING  : score dropped >12 pts in 5 days OR price crossed below 50 SMA
-  EXITED     : failed knockout OR below 150 EMA (Stage 2 over)
-
-Universe: NSE full equity CSV (~2200 EQ+BE stocks, no session needed)
-Fallback: Nifty 500 + Smallcap 250 + Microcap 250 (~700 unique stocks)
-ADTV filter: ₹1Cr minimum (covers ≥₹100Cr market cap range)
-
-Medha modification (turnaround tier, Fundamental):
-  EPS < 0 but improving (loss narrowed >30% YoY) AND eps_acceleration_quarters ≥ 1
-  AND ROCE > 10% → 5 pts instead of 0. Catches pre-profit growth companies on
-  the cusp of profitability before institutional recognition.
+DB column repurposing (backward compat):
+  stage2_subtype      ← Weinstein stage string
+  stage2_score        ← synthetic (90/70/40/20/0)
+  above_50sma         ← Price > MA_30W
+  sma50_above_ema150  ← MA_30W slope >= 0
+  ema150_above_sma200 ← Price > EMA_10W
+  above_200sma        ← Price > resistance ceiling
+  sma200_slope        ← MA_30W_slope value
+  ema150_distance_pct ← % distance from MA_30W
+  days_in_stage2      ← weeks above MA_30W
+  vol_5d_vs_50d_ratio ← Vol_Ratio_Weekly
+  rs_63d_score        ← Mansfield RS value
+  hl_depth_20d        ← Minervini VCP depth (daily)
+  vcp_volume_ratio    ← daily vol/50d ratio (for dry-up flag)
+  pivot_proximity_pct ← Minervini pivot proximity (daily)
+  rs_line_new_high    ← is_daily_ma_stacked
 """
 
 import os, time, requests
@@ -55,17 +53,33 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 TODAY = date.today().isoformat()
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-BENCHMARK  = "^CRSLDX"
-MIN_ADTV   = 10_000_000   # ₹1 Cr (lowered from ₹5 Cr for smallcap coverage)
-RS_PERIOD  = 63
-EMA_PERIOD = 150           # kept for backfill compatibility
-VOL_SMA    = 20            # kept for backfill compatibility
+BENCHMARK       = "^CRSLDX"   # Nifty Total Market — Mansfield RS benchmark
+MIN_WEEKLY_TVR  = 5_000_000   # ₹50L weekly turnover ≈ ₹1Cr daily ADTV proxy
+MIN_ADTV        = 10_000_000  # kept for backfill compat
 
 NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept":     "application/json, */*",
     "Referer":    "https://www.nseindia.com/",
 }
+
+STAGE_SYNTHETIC_SCORES = {
+    "EARLY_STAGE_2":     90,
+    "LATE_STAGE_2":      70,
+    "STAGE_1_BASING":    40,
+    "STAGE_3_TOPPING":   20,
+    "STAGE_4_DECLINING":  0,
+}
+
+STAGE_TIERS = {
+    "EARLY_STAGE_2":     "CONFIRMED",
+    "LATE_STAGE_2":      "EMERGING",
+    "STAGE_1_BASING":    "WATCHING",
+    "STAGE_3_TOPPING":   "WATCHING",
+    "STAGE_4_DECLINING": "NONE",
+}
+
+STAGES_TO_STORE = {"EARLY_STAGE_2", "LATE_STAGE_2", "STAGE_1_BASING"}
 
 
 # ── Universe ───────────────────────────────────────────────────────────────────
@@ -86,11 +100,6 @@ def _nse_index_tickers(index_name: str, session: requests.Session) -> list[str]:
 
 
 def _nse_equity_csv() -> list[str]:
-    """
-    Download NSE's full equity list CSV (~2200 EQ-series stocks).
-    URL is publicly accessible without session cookies.
-    Filters to EQ and BE series only (excludes ETFs, SME, OFS).
-    """
     try:
         import io
         r = requests.get(
@@ -99,7 +108,6 @@ def _nse_equity_csv() -> list[str]:
             timeout=30,
         )
         df = pd.read_csv(io.StringIO(r.text))
-        # Column name may vary — find the SYMBOL and SERIES columns
         sym_col    = next((c for c in df.columns if "SYMBOL" in c.upper()), None)
         series_col = next((c for c in df.columns if "SERIES" in c.upper()), None)
         if sym_col is None:
@@ -107,8 +115,7 @@ def _nse_equity_csv() -> list[str]:
         if series_col is not None:
             df = df[df[series_col].isin(["EQ", "BE"])]
         symbols = df[sym_col].dropna().str.strip().tolist()
-        # Basic sanity filter
-        symbols = [s for s in symbols if s and s.isalnum() or (len(s) < 20 and s.replace("-", "").replace("&", "").isalnum())]
+        symbols = [s for s in symbols if s and (s.isalnum() or (len(s) < 20 and s.replace("-","").replace("&","").isalnum()))]
         print(f"[universe] NSE CSV: {len(symbols)} EQ+BE series stocks")
         return symbols
     except Exception as e:
@@ -117,19 +124,10 @@ def _nse_equity_csv() -> list[str]:
 
 
 def get_universe_tickers() -> list[str]:
-    """
-    Universe: tries 3 sources in order:
-      1. NSE equity CSV — ~2200 EQ+BE stocks (full NSE listing, no session needed) [PRIMARY]
-      2. NSE index API (N500 + SC250 + MC250) — ~700 stocks, needs session [fallback]
-      3. Hardcoded curated Nifty 500 list — 174 stocks [last resort]
-    ADTV filter (₹1 Cr) in analyse() handles the >₹100 Cr market cap screening.
-    """
-    # Try 1: NSE equity CSV — full ~2200 stock universe (no session required)
     csv_tickers = _nse_equity_csv()
     if len(csv_tickers) > 500:
         return csv_tickers
 
-    # Try 2: NSE index API (~700 curated stocks)
     try:
         session = requests.Session()
         session.headers.update(NSE_HEADERS)
@@ -145,13 +143,11 @@ def get_universe_tickers() -> list[str]:
     except Exception as e:
         print(f"[universe] NSE index API failed: {e}")
 
-    # Try 3: hardcoded fallback
     print("[universe] falling back to hardcoded list")
     return get_nifty500_tickers()
 
 
 def get_nifty500_tickers() -> list[str]:
-    """Fallback: curated Nifty 500 list."""
     try:
         session = requests.Session()
         session.headers.update(NSE_HEADERS)
@@ -163,13 +159,12 @@ def get_nifty500_tickers() -> list[str]:
         tickers = [
             item["symbol"] for item in r.json().get("data", [])
             if item.get("symbol") and not item["symbol"].startswith("$")
-            and item["symbol"].replace("-", "").replace("&", "").replace("_", "").isalnum()
+            and item["symbol"].replace("-","").replace("&","").replace("_","").isalnum()
         ]
         if len(tickers) > 100:
-            print(f"[universe] NSE API: {len(tickers)} N500 tickers")
             return tickers
     except Exception as e:
-        print(f"[universe] N500 fallback API failed: {e}, using hardcoded list")
+        print(f"[universe] N500 fallback failed: {e}")
     return [
         "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","SBIN","BAJFINANCE",
         "BHARTIARTL","KOTAKBANK","LT","AXISBANK","ASIANPAINT","MARUTI","TITAN",
@@ -203,165 +198,265 @@ def get_nifty500_tickers() -> list[str]:
     ]
 
 
-# ── v3.0 Scoring ───────────────────────────────────────────────────────────────
-def compute_stage2_score(metrics: dict) -> tuple[int, dict]:
+# ── Mansfield RS ───────────────────────────────────────────────────────────────
+def compute_mansfield_rs(close_w: pd.Series, bench_w: pd.DataFrame) -> tuple[float, bool]:
     """
-    Returns (total_score, components_dict).
-    Knockout: if trend alignment fails, returns (0, all_zeros) immediately.
-    Components: {"trend": int, "fundamental": int, "volatility": int, "pivot": int, "rs": int}
+    Returns (mansfield_rs_now, is_rising_over_4wks).
+    Mansfield RS = ((R_stock / R_bench) - 1) * 100
+    where R = close_now / close_52wks_ago
     """
-    components = {"trend": 0, "fundamental": 0, "volatility": 0, "pivot": 0, "rs": 0}
-
-    # ── 1. TREND ALIGNMENT — KNOCKOUT (30 pts) ────────────────────────────────
-    # All 4 must pass: Price > 50SMA > 150EMA > 200SMA AND 200SMA slope > 0
-    trend_ok = (
-        metrics.get("above_50sma", False) and
-        metrics.get("sma50_above_ema150", False) and
-        metrics.get("ema150_above_sma200", False) and
-        float(metrics.get("sma200_slope") or 0) > 0
-    )
-    if not trend_ok:
-        return 0, components
-
-    components["trend"] = 30
-    score = 30
-
-    # ── 2. FUNDAMENTAL ENGINE — ADDITIVE (20 pts) ─────────────────────────────
-    eps_ttm      = metrics.get("ttm_eps_growth")
-    eps_accel    = metrics.get("eps_is_accelerating", False)
-    roce         = metrics.get("roce")
-    accel_qtrs   = int(metrics.get("eps_acceleration_quarters") or 0)
-
-    if eps_ttm is not None and eps_ttm > 0 and eps_accel and roce is not None and roce > 15:
-        fund_pts = 20   # Full: positive + accelerating + ROCE >15%
-    elif (eps_ttm is not None and eps_ttm > 20) or (roce is not None and roce > 15):
-        fund_pts = 10   # Partial: strong growth OR solid ROCE
-    elif (
-        eps_ttm is not None and -70 < eps_ttm < 0 and  # loss but not catastrophic
-        accel_qtrs >= 1 and                              # improving at least 1 quarter
-        roce is not None and roce > 10                   # some capital efficiency
-    ):
-        fund_pts = 5    # Turnaround: pre-profit but improving (Medha modification)
-    else:
-        fund_pts = 0
-
-    score += fund_pts
-    components["fundamental"] = fund_pts
-
-    # ── 3. VOLATILITY CONTRACTION — ADDITIVE (20 pts) ─────────────────────────
-    # 20-day H-L depth = (max_high - min_low) / close over 20d
-    # 5d-vol vs 50d-vol ratio: < 0.5 = dry-up (Minervini VCP v3)
-    hl_depth  = float(metrics.get("hl_depth_20d") or 100)
-    vol_ratio = float(metrics.get("vol_5d_vs_50d_ratio") or 1.0)
-
-    if hl_depth <= 5 and vol_ratio < 0.5:
-        vol_pts = 20   # Full: tight base + confirmed volume dry-up
-    elif hl_depth <= 10:
-        vol_pts = 10   # Partial: acceptable contraction
-    else:
-        vol_pts = 0    # Loose/choppy base
-
-    score += vol_pts
-    components["volatility"] = vol_pts
-
-    # ── 4. PIVOT PROXIMITY — ADDITIVE (15 pts) ────────────────────────────────
-    # (close - 10d_high) / 10d_high * 100  →  negative = below 10d high (in zone)
-    pivot = float(metrics.get("pivot_proximity_pct") or -50.0)
-
-    if -5 <= pivot <= 2:
-        pivot_pts = 15   # Full: within the coil (-5% to +2%)
-    elif -10 <= pivot < -5:
-        pivot_pts = 7    # Partial: slightly below, still watchable
-    else:
-        pivot_pts = 0    # Extended (chasing) or too far below
-
-    score += pivot_pts
-    components["pivot"] = pivot_pts
-
-    # ── 5. RELATIVE STRENGTH — ADDITIVE (15 pts) ─────────────────────────────
-    # Dual-timeframe leadership: 52W rank + 63d RS outperformance
-    rs_52w = metrics.get("rs_52w_percentile")
-    rs_63d = float(metrics.get("rs_63d_score") or 0)
-
-    if rs_52w is not None and rs_52w >= 85 and rs_63d >= 10:
-        rs_pts = 15   # Full: top-decile leader + strong recent momentum
-    elif rs_52w is not None and rs_52w >= 70 and rs_63d >= 5:
-        rs_pts = 7    # Partial: leadership + positive momentum
-    else:
-        rs_pts = 0    # Lagging market
-
-    score += rs_pts
-    components["rs"] = rs_pts
-
-    return min(100, score), components
-
-
-def tier_from_score(score: int) -> str:
-    if score >= 85: return "CONFIRMED"
-    if score >= 70: return "EMERGING"
-    return "NONE"
-
-
-def get_stage2_subtype(sma50_val: float, sma200_val: float) -> str:
-    """Gap between 50 SMA and 200 SMA determines how far into Stage 2 the stock is."""
-    if sma200_val <= 0:
-        return "EARLY STAGE 2"
-    gap_pct = (sma50_val - sma200_val) / sma200_val * 100
-    if gap_pct <= 15:
-        return "EARLY STAGE 2"
-    elif gap_pct <= 30:
-        return "MID STAGE 2"
-    else:
-        return "LATE STAGE 2"
-
-
-def lifecycle_from_context(
-    score: int,
-    prev_score_5d: int | None,
-    days_confirmed: int,
-    above_50sma: bool,
-    above_150ema: bool,
-) -> str:
-    # EXITED = stock is below 150 EMA (true Stage 2 exit)
-    # All stocks stored via analyse() passed the hard filter, so above_150ema=True always.
-    # EXITED should NOT be triggered by score alone — low-scoring stocks are WATCHING.
-    if not above_150ema:
-        return "EXITED"
-    if score >= 85:
-        if days_confirmed >= 30 and above_50sma:
-            return "SUSTAINED"
-        if prev_score_5d is not None and (prev_score_5d - score) > 12:
-            return "WEAKENING"
-        if not above_50sma:
-            return "WEAKENING"
-        return "CONFIRMED"
-    if score >= 70:
-        # Can be weakening if recently dropped from CONFIRMED territory
-        if prev_score_5d is not None and prev_score_5d >= 85 and (prev_score_5d - score) > 12:
-            return "WEAKENING"
-        return "EMERGING"
-    return "WATCHING"   # 60-69
-
-
-# ── VCP (legacy — displayed but not used in v3.0 scoring) ────────────────────
-def compute_vcp(hist: pd.DataFrame) -> tuple:
     try:
-        close  = hist["Close"].squeeze()
-        volume = hist["Volume"].squeeze()
-        high   = hist["High"].squeeze()
-        low    = hist["Low"].squeeze()
-        if len(close) < 25:
-            return None, None, 0
-        vol_5d  = float(volume.iloc[-6:-1].mean())
-        vol_20d = float(volume.iloc[-21:-1].mean())
-        vcp_vol = round(vol_5d / vol_20d, 3) if vol_20d > 0 else 1.0
-        adr_5d  = float(((high - low) / close).iloc[-6:-1].mean())
-        adr_15d = float(((high - low) / close).iloc[-21:-6].mean())
-        vcp_adr = round(adr_5d / adr_15d, 3) if adr_15d > 0 else 1.0
-        def vpts(r): return 5 if r <= 0.5 else 4 if r <= 0.65 else 2 if r <= 0.8 else 0
-        return vcp_vol, vcp_adr, vpts(vcp_vol) + vpts(vcp_adr)
+        if bench_w is None or bench_w.empty:
+            return 0.0, False
+        bench_close = bench_w["Close"].squeeze() if "Close" in bench_w.columns else bench_w.iloc[:, 0]
+        aligned = pd.DataFrame({"stock": close_w, "bench": bench_close}).dropna()
+        if len(aligned) < 54:
+            return 0.0, False
+
+        # RS line value = (stock/stock_52wk) / (bench/bench_52wk)
+        rs_now = (float(aligned["stock"].iloc[-1]) / float(aligned["stock"].iloc[-53])) / \
+                 (float(aligned["bench"].iloc[-1]) / float(aligned["bench"].iloc[-53]))
+        mansfield_rs = round((rs_now - 1) * 100, 2)
+
+        # 4-week slope
+        if len(aligned) >= 57:
+            rs_4w_ago = (float(aligned["stock"].iloc[-5]) / float(aligned["stock"].iloc[-57])) / \
+                        (float(aligned["bench"].iloc[-5]) / float(aligned["bench"].iloc[-57]))
+            is_rising = rs_now > rs_4w_ago
+        else:
+            is_rising = mansfield_rs > 0
+
+        return mansfield_rs, is_rising
     except Exception:
-        return None, None, 0
+        return 0.0, False
+
+
+# ── Weinstein stage classifier ──────────────────────────────────────────────────
+def _classify_weinstein_stage(
+    price_above_ma30w: bool,
+    ma30w_slope: float,
+    price_above_ema10w: bool,
+    price_above_resistance: bool,
+    vol_ratio_weekly: float,
+    mansfield_rs: float,
+    mansfield_rs_rising: bool,
+    ma30w_dist_pct: float,
+    weeks_above_ma30w: int,
+) -> str:
+    # Stage 4: price below declining MA
+    if not price_above_ma30w and ma30w_slope < 0:
+        return "STAGE_4_DECLINING"
+
+    # Stage 3: topping — extended uptrend with MA now flattening
+    if weeks_above_ma30w >= 20 and ma30w_slope <= 0.0 and not price_above_resistance:
+        return "STAGE_3_TOPPING"
+
+    if price_above_ma30w:
+        # Early Stage 2: breakout with volume + RS confirmation
+        if (ma30w_slope >= 0.0 and
+                price_above_resistance and
+                vol_ratio_weekly >= 1.5 and
+                (mansfield_rs > 0 or mansfield_rs_rising)):
+            return "EARLY_STAGE_2"
+
+        # Late Stage 2: established uptrend (strong slope + above EMA_10W)
+        if ma30w_slope > 0.002 and price_above_ema10w and weeks_above_ma30w >= 4:
+            return "LATE_STAGE_2"
+
+        # Late Stage 2: well above MA in broad uptrend
+        if ma30w_slope >= 0.0 and weeks_above_ma30w >= 8:
+            return "LATE_STAGE_2"
+
+    # Stage 1: basing — price near MA, slope flat
+    if abs(ma30w_dist_pct) <= 10 and -0.001 <= ma30w_slope <= 0.001:
+        return "STAGE_1_BASING"
+
+    # Catch-all
+    if price_above_ma30w:
+        return "LATE_STAGE_2" if ma30w_slope >= 0 else "STAGE_1_BASING"
+    return "STAGE_4_DECLINING"
+
+
+# ── Minervini radar (daily data, informational) ────────────────────────────────
+def compute_minervini_radar(daily_hist: pd.DataFrame) -> dict:
+    defaults = {
+        "hl_depth_20d":    None,   # vcp_depth_20d_pct
+        "vcp_volume_ratio": 1.0,   # daily vol / 50d avg
+        "pivot_proximity_pct": None,
+        "rs_line_new_high": False,  # is_daily_ma_stacked
+    }
+    try:
+        if daily_hist.empty or len(daily_hist) < 60:
+            return defaults
+        if isinstance(daily_hist.columns, pd.MultiIndex):
+            daily_hist = daily_hist.xs(daily_hist.columns.get_level_values(1)[0], level=1, axis=1)
+        close  = daily_hist["Close"].squeeze()
+        high   = daily_hist["High"].squeeze()
+        low    = daily_hist["Low"].squeeze()
+        volume = daily_hist["Volume"].fillna(0).squeeze()
+        last_close = float(close.iloc[-1])
+
+        # VCP depth: (Max_H_20d - Min_L_20d) / Max_H_20d
+        max_h_20d = float(high.tail(20).max())
+        min_l_20d = float(low.tail(20).min())
+        vcp_depth = round((max_h_20d - min_l_20d) / max_h_20d * 100, 2) if max_h_20d > 0 else None
+
+        # Volume dry-up: last daily vol vs 50d SMA
+        vol_sma_50d = float(volume.rolling(50).mean().iloc[-1])
+        last_vol    = float(volume.iloc[-1])
+        vol_ratio_daily = round(last_vol / vol_sma_50d, 3) if vol_sma_50d > 0 else 1.0
+
+        # Pivot proximity: (Close - Max_H_10d) / Max_H_10d
+        max_h_10d = float(high.tail(10).max())
+        pivot_prox = round((last_close - max_h_10d) / max_h_10d * 100, 2) if max_h_10d > 0 else None
+
+        # Daily MA stack: Price > SMA(50) > EMA(150) > SMA(200)
+        sma50_d  = close.rolling(50).mean().iloc[-1]
+        ema150_d = close.ewm(span=150, adjust=False).mean().iloc[-1]
+        sma200_d = close.rolling(200).mean().iloc[-1]
+        is_stacked = bool(
+            not any(pd.isna(v) for v in [sma50_d, ema150_d, sma200_d]) and
+            last_close > float(sma50_d) > float(ema150_d) > float(sma200_d)
+        )
+
+        return {
+            "hl_depth_20d":       vcp_depth,
+            "vcp_volume_ratio":   vol_ratio_daily,
+            "pivot_proximity_pct": pivot_prox,
+            "rs_line_new_high":   is_stacked,
+        }
+    except Exception:
+        return defaults
+
+
+# ── Core Weinstein analysis (weekly) ──────────────────────────────────────────
+def analyse_weekly(weekly_hist: pd.DataFrame, bench_weekly: pd.DataFrame) -> dict | None:
+    """
+    Weinstein stage analysis from weekly OHLCV.
+    Returns metrics dict or None (fails liquidity / data filter).
+    """
+    if weekly_hist.empty:
+        return None
+    if isinstance(weekly_hist.columns, pd.MultiIndex):
+        weekly_hist = weekly_hist.xs(weekly_hist.columns.get_level_values(1)[0], level=1, axis=1)
+    weekly_hist = weekly_hist.dropna(subset=["Close"])
+    if len(weekly_hist) < 35:
+        return None
+
+    close_w  = weekly_hist["Close"].squeeze()
+    volume_w = weekly_hist["Volume"].fillna(0).squeeze()
+    high_w   = weekly_hist["High"].squeeze()
+    low_w    = weekly_hist["Low"].squeeze()
+
+    last_close = float(close_w.iloc[-1])
+    if pd.isna(last_close) or last_close <= 0:
+        return None
+
+    # Liquidity: 4-week avg weekly turnover
+    weekly_tvr = (close_w * volume_w).rolling(4).mean()
+    avg_tvr = float(weekly_tvr.iloc[-1]) if not pd.isna(weekly_tvr.iloc[-1]) else 0.0
+    if avg_tvr < MIN_WEEKLY_TVR:
+        return None
+
+    # Core Weinstein indicators
+    ma_30w     = close_w.rolling(30).mean()
+    ema_10w    = close_w.ewm(span=10, adjust=False).mean()
+    vol_avg_30w = volume_w.rolling(30).mean()
+
+    if pd.isna(ma_30w.iloc[-1]):
+        return None
+
+    last_ma_30w  = float(ma_30w.iloc[-1])
+    last_ema_10w = float(ema_10w.iloc[-1])
+    last_vol_avg = float(vol_avg_30w.iloc[-1]) if not pd.isna(vol_avg_30w.iloc[-1]) else 1.0
+    last_vol_w   = float(volume_w.iloc[-1])
+
+    # MA_30W slope: spec formula (MA[-1] - MA[-5]) / MA[-5] — 4-week change
+    ma_clean = ma_30w.dropna()
+    if len(ma_clean) >= 5:
+        ma30w_slope = (float(ma_clean.iloc[-1]) - float(ma_clean.iloc[-5])) / abs(float(ma_clean.iloc[-5]))
+    else:
+        ma30w_slope = 0.0
+
+    vol_ratio_weekly = round(last_vol_w / last_vol_avg, 3) if last_vol_avg > 0 else 1.0
+
+    # Stage 1 resistance ceiling: max high of prior 20–40 weeks
+    n_look = min(40, max(20, len(high_w) - 2))
+    resistance_ceiling = float(high_w.iloc[-(n_look + 1):-1].max()) if n_look > 0 else last_close
+
+    # Mansfield RS
+    mansfield_rs, mansfield_rs_rising = compute_mansfield_rs(close_w, bench_weekly)
+
+    # Key booleans
+    price_above_ma30w       = bool(last_close > last_ma_30w)
+    price_above_ema10w      = bool(last_close > last_ema_10w)
+    price_above_resistance  = bool(last_close > resistance_ceiling)
+    ma30w_dist_pct          = round((last_close - last_ma_30w) / last_ma_30w * 100, 2)
+
+    # Count consecutive weeks above MA_30W
+    above_flags = (close_w > ma_30w).values
+    weeks_above_ma30w = 0
+    for flag in reversed(above_flags):
+        if pd.isna(flag): break
+        if flag: weeks_above_ma30w += 1
+        else: break
+
+    # Stage classification
+    weinstein_stage = _classify_weinstein_stage(
+        price_above_ma30w, ma30w_slope, price_above_ema10w,
+        price_above_resistance, vol_ratio_weekly,
+        mansfield_rs, mansfield_rs_rising,
+        ma30w_dist_pct, weeks_above_ma30w,
+    )
+
+    # 52W data (weekly)
+    n_52w    = min(52, len(high_w))
+    high_52w = float(high_w.tail(n_52w).max())
+    low_52w  = float(low_w.tail(n_52w).min())
+    price_52w_pos = round((last_close - low_52w) / (high_52w - low_52w) * 100, 1) \
+                    if (high_52w - low_52w) > 0 else 50.0
+
+    price_52w_ago = float(close_w.iloc[-53]) if len(close_w) >= 53 else float(close_w.iloc[0])
+    rs_52w_raw = round((last_close - price_52w_ago) / price_52w_ago * 100, 2) if price_52w_ago > 0 else 0.0
+
+    rs_trend = "Positive" if mansfield_rs > 5 else ("Negative" if mansfield_rs < -5 else "Flat")
+
+    return {
+        # Stage
+        "weinstein_stage":      weinstein_stage,
+        # Weinstein indicators → repurposed DB columns
+        "above_50sma":          price_above_ma30w,       # Price > MA_30W
+        "sma50_above_ema150":   bool(ma30w_slope >= 0),  # MA slope flat/up
+        "ema150_above_sma200":  price_above_ema10w,      # Price > EMA_10W
+        "above_200sma":         price_above_resistance,   # Price > resistance ceiling
+        "sma200_slope":         round(ma30w_slope, 6),   # MA_30W_slope value
+        "ema150_distance_pct":  ma30w_dist_pct,          # Distance from MA_30W
+        "ema150_slope":         0.0,
+        "base_20d_distance_pct": ma30w_dist_pct,
+        # Duration / position
+        "days_in_stage2":       weeks_above_ma30w,       # weeks above MA_30W
+        "price_52w_position":   price_52w_pos,
+        "base_width_weeks":     weeks_above_ma30w,
+        # Volume
+        "vol_5d_vs_50d_ratio":  vol_ratio_weekly,        # weekly vol ratio
+        "volume_multiplier":    vol_ratio_weekly,
+        # RS
+        "rs_63d_score":         mansfield_rs,            # Mansfield RS
+        "rs_52w_raw":           rs_52w_raw,
+        "rs_trend":             rs_trend,
+        # Minervini radar (filled by compute_minervini_radar later)
+        "hl_depth_20d":         None,
+        "vcp_volume_ratio":     1.0,
+        "pivot_proximity_pct":  None,
+        "rs_line_new_high":     False,
+        # Legacy VCP (not used in v4.0)
+        "vcp_adr_ratio":        None,
+        "vcp_score":            0,
+        "adr_pct":              0.0,
+        # Reference
+        "close":                last_close,
+        "resistance_ceiling":   resistance_ceiling,
+    }
 
 
 # ── Fundamentals ───────────────────────────────────────────────────────────────
@@ -393,9 +488,6 @@ def get_fundamentals(ticker_obj: yf.Ticker) -> dict:
                         out["ttm_eps_growth"] = round(
                             (ttm_curr - ttm_prev) / abs(ttm_prev) * 100, 2
                         )
-
-                # EPS acceleration: count quarters where Q_n YoY > Q_{n+1} YoY
-                # Rubric: Q0 YoY > Q1 YoY means eps_is_accelerating = True (accel_count >= 1)
                 if len(vals) >= 8:
                     yoy = []
                     for i in range(4):
@@ -406,198 +498,10 @@ def get_fundamentals(ticker_obj: yf.Ticker) -> dict:
                     if len(yoy) >= 2:
                         accel = sum(1 for i in range(len(yoy) - 1) if yoy[i] > yoy[i + 1])
                         out["eps_acceleration_quarters"] = accel
-                        out["eps_is_accelerating"] = accel >= 1   # Q0 YoY > Q1 YoY
+                        out["eps_is_accelerating"] = accel >= 1
     except Exception:
         pass
     return out
-
-
-# ── Technical analysis ─────────────────────────────────────────────────────────
-def analyse(hist: pd.DataFrame, bench_hist: pd.DataFrame, ticker_obj: yf.Ticker) -> dict | None:
-    """
-    Full technical analysis. Returns metrics dict or None (failed hard filters).
-    Hard filters applied here match the knockout exactly — only qualifying stocks
-    are returned and stored, keeping the DB clean.
-    """
-    if hist.empty or len(hist) < 210:
-        return None
-
-    if isinstance(hist.columns, pd.MultiIndex):
-        hist = hist.xs(hist.columns.get_level_values(1)[0], level=1, axis=1)
-
-    hist = hist.dropna(subset=["Close"])
-    if len(hist) < 200:
-        return None
-
-    close  = hist["Close"].squeeze()
-    volume = hist["Volume"].fillna(0).squeeze()
-    high   = hist["High"].squeeze()
-    low    = hist["Low"].squeeze()
-
-    # Liquidity filter
-    adtv_20 = float((close * volume).rolling(20).mean().iloc[-1])
-    if adtv_20 < MIN_ADTV or pd.isna(adtv_20):
-        return None
-
-    last_close = float(close.iloc[-1])
-    if pd.isna(last_close) or last_close <= 0:
-        return None
-
-    # ── Moving Averages ───────────────────────────────────────────────────────
-    ema150 = close.ewm(span=150, adjust=False).mean()
-    sma200 = close.rolling(200).mean()
-    sma50  = close.rolling(50).mean()
-    sma20  = close.rolling(20).mean()
-
-    last_ema150 = float(ema150.iloc[-1])
-    last_sma200 = float(sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else 0.0
-    last_sma50  = float(sma50.iloc[-1])  if not pd.isna(sma50.iloc[-1])  else 0.0
-    last_sma20  = float(sma20.iloc[-1])  if not pd.isna(sma20.iloc[-1])  else last_close
-
-    if pd.isna(last_ema150) or last_close <= last_ema150:
-        return None   # Below 150 EMA — Stage 2 not active
-
-    # ── Trend alignment (knockout conditions) ─────────────────────────────────
-    above_50sma         = bool(last_close > last_sma50)  if last_sma50 > 0 else False
-    sma50_above_ema150  = bool(last_sma50 > last_ema150) if last_sma50 > 0 else False
-    ema150_above_sma200 = bool(last_ema150 > last_sma200) if last_sma200 > 0 else False
-    above_200sma        = bool(last_close > last_sma200)  if last_sma200 > 0 else False
-
-    sma200_slope = 0.0
-    sma200_clean = sma200.dropna()
-    if len(sma200_clean) >= 21:
-        s_now = float(sma200_clean.iloc[-1])
-        s_20d = float(sma200_clean.iloc[-21])
-        sma200_slope = round((s_now - s_20d) / abs(s_20d) * 100, 4) if s_20d != 0 else 0.0
-
-    # Apply hard filters matching knockout — don't store non-qualifying stocks
-    if not (above_50sma and sma50_above_ema150 and ema150_above_sma200 and sma200_slope > 0):
-        return None
-
-    # ── EMA150 analytics (display) ────────────────────────────────────────────
-    ema150_slope = round(
-        (float(ema150.iloc[-1]) - float(ema150.iloc[-21])) / float(ema150.iloc[-21]) * 100
-        if len(ema150) >= 21 else 0, 4
-    )
-    ema_dist = round((last_close - last_ema150) / last_ema150 * 100, 2)
-
-    # ── Base tightness from 20d SMA (display) ────────────────────────────────
-    base_20d_dist = round((last_close - last_sma20) / last_sma20 * 100, 2)
-
-    # ── Days continuously above 150 EMA ──────────────────────────────────────
-    above_ema150_flags = (close > ema150).values
-    days_in_s2 = 0
-    for flag in reversed(above_ema150_flags):
-        if flag: days_in_s2 += 1
-        else: break
-
-    # ── Stage 2 sub-type (50SMA vs 200SMA gap) ───────────────────────────────
-    subtype = get_stage2_subtype(last_sma50, last_sma200)
-
-    # ── 20-day H-L depth (v3.0 Volatility Contraction) ───────────────────────
-    hl_depth_20d = round((float(high.tail(20).max()) - float(low.tail(20).min())) / last_close * 100, 2)
-
-    # ── Volume 5d vs 50d avg (v3.0 VCP criterion) ────────────────────────────
-    vol_5d_avg  = float(volume.tail(5).mean())
-    vol_50d_avg = float(volume.rolling(50).mean().iloc[-1])
-    vol_5d_vs_50d = round(vol_5d_avg / vol_50d_avg, 3) if vol_50d_avg > 0 else 1.0
-
-    # ── Pivot proximity: distance from 10-day high ────────────────────────────
-    high_10d = float(high.tail(10).max())
-    pivot_pct = round((last_close - high_10d) / high_10d * 100, 2)
-
-    # ── RS vs Nifty Total Market — 63-day slope ───────────────────────────────
-    rs_63d_score, rs_trend = 0.0, "Flat"
-    rs_line_new_high = False
-    try:
-        if bench_hist is not None and not bench_hist.empty:
-            bc = bench_hist["Close"].squeeze().reindex(close.index, method="ffill")
-            bc_clean = bc.dropna()
-            if len(bc_clean) >= RS_PERIOD:
-                rs_line = (close.reindex(bc_clean.index) / bc_clean).dropna()
-                if len(rs_line) >= RS_PERIOD:
-                    rs_vals = rs_line.iloc[-RS_PERIOD:].values
-                    rs_start = float(rs_vals[0])
-                    rs_end   = float(rs_vals[-1])
-                    rs_63d_score = round((rs_end - rs_start) / abs(rs_start) * 100, 2) if rs_start != 0 else 0
-                    rs_trend = "Positive" if rs_63d_score > 5 else "Negative" if rs_63d_score < -5 else "Flat"
-                    # RS line new high: current RS value is within 0.5% of its 252-day high
-                    lookback = min(252, len(rs_line))
-                    rs_line_new_high = bool(float(rs_line.iloc[-1]) >= float(rs_line.tail(lookback).max()) * 0.995)
-    except Exception:
-        pass
-
-    # ── ADR % (Average Daily Range — Minervini sizing tool) ───────────────────
-    adr_pct = round(float(((high - low) / close).tail(20).mean() * 100), 2)
-
-    # ── 52-week price position (must be ≥75% for Minervini SEPA) ─────────────
-    n_52w = min(252, len(high))
-    high_52w = float(high.tail(n_52w).max())
-    low_52w  = float(low.tail(n_52w).min())
-    price_52w_pos = round((last_close - low_52w) / (high_52w - low_52w) * 100, 1) \
-                    if (high_52w - low_52w) > 0 else 50.0
-
-    # ── Base width: weeks since stock last made its 52-week high ──────────────
-    try:
-        recent_highs     = high.tail(n_52w)
-        idx_52w_high     = recent_highs.idxmax()
-        days_since_peak  = max(0, (close.index[-1] - idx_52w_high).days)
-        base_width_weeks = days_since_peak // 7
-    except Exception:
-        base_width_weeks = 0
-
-    # ── Legacy VCP (retained for display) ────────────────────────────────────
-    vcp_vol_ratio, vcp_adr_ratio, vcp_score = compute_vcp(hist)
-
-    # ── Volume on last session ────────────────────────────────────────────────
-    vol_sma20 = float(volume.rolling(20).mean().iloc[-2]) if len(volume) > 20 else 1.0
-    vol_mult  = round(float(volume.iloc[-1]) / vol_sma20, 2) if vol_sma20 > 0 else 0.0
-
-    # ── 52W raw return (cross-universe percentile ranking) ────────────────────
-    price_52w_ago = float(close.iloc[-253]) if len(close) >= 253 else float(close.iloc[0])
-    rs_52w_raw = round((last_close - price_52w_ago) / price_52w_ago * 100, 2) if price_52w_ago > 0 else 0.0
-
-    # ── Fundamentals ─────────────────────────────────────────────────────────
-    fund = get_fundamentals(ticker_obj)
-
-    return {
-        # Knockout / Trend
-        "above_50sma":              above_50sma,
-        "sma50_above_ema150":       sma50_above_ema150,
-        "ema150_above_sma200":      ema150_above_sma200,
-        "above_200sma":             above_200sma,
-        "sma200_slope":             sma200_slope,
-        "stage2_subtype":           subtype,
-        # Stage duration
-        "days_in_stage2":           days_in_s2,
-        # EMA display
-        "ema150_distance_pct":      ema_dist,
-        "ema150_slope":             ema150_slope,
-        "base_20d_distance_pct":    base_20d_dist,
-        # v3.0 Volatility Contraction
-        "hl_depth_20d":             hl_depth_20d,
-        "vol_5d_vs_50d_ratio":      vol_5d_vs_50d,
-        # v3.0 Pivot Proximity
-        "pivot_proximity_pct":      pivot_pct,
-        # RS
-        "rs_trend":                 rs_trend,
-        "rs_63d_score":             rs_63d_score,
-        "rs_52w_raw":               rs_52w_raw,
-        "rs_line_new_high":         rs_line_new_high,
-        # New v3.1 metrics
-        "adr_pct":                  adr_pct,
-        "price_52w_position":       price_52w_pos,
-        "base_width_weeks":         base_width_weeks,
-        # Legacy VCP (display only)
-        "vcp_volume_ratio":         vcp_vol_ratio,
-        "vcp_adr_ratio":            vcp_adr_ratio,
-        "vcp_score":                vcp_score,
-        # Volume
-        "volume_multiplier":        vol_mult,
-        # Close for logging
-        "close":                    last_close,
-        **fund,
-    }
 
 
 # ── PEAD confluence ───────────────────────────────────────────────────────────
@@ -634,7 +538,6 @@ def get_recent_signal_history() -> dict:
 
 
 def get_base_counts() -> dict[str, int]:
-    """Return {ticker: reentry_count} — base_count = reentry_count + 1."""
     try:
         resp = sb.table("stage2_signals").select("ticker").eq("is_reentry", True).execute()
         counts: dict[str, int] = {}
@@ -653,7 +556,6 @@ def write_transition(
     from_lc:  str | None, to_lc:  str | None,
     price: float,
 ) -> None:
-    """Log a sub-type or lifecycle state change to the transitions table."""
     if from_sub == to_sub and from_lc == to_lc:
         return
     try:
@@ -670,61 +572,84 @@ def write_transition(
         print(f"  [transition] {ticker}: {e}")
 
 
+# ── Lifecycle from stage ───────────────────────────────────────────────────────
+def lifecycle_from_stage(
+    stage: str,
+    weeks_above_ma30w: int,
+    prev_stage: str | None,
+    prev_score_5d: int | None,
+) -> str:
+    if stage == "EARLY_STAGE_2":
+        return "CONFIRMED"
+    if stage == "LATE_STAGE_2":
+        if weeks_above_ma30w >= 30:
+            return "SUSTAINED"
+        if prev_stage == "EARLY_STAGE_2":
+            return "CONFIRMED"   # just entered late — still fresh
+        return "EMERGING"
+    if stage == "STAGE_1_BASING":
+        if prev_stage in ("EARLY_STAGE_2", "LATE_STAGE_2"):
+            return "WEAKENING"
+        return "WATCHING"
+    if stage == "STAGE_3_TOPPING":
+        return "WEAKENING"
+    return "EXITED"
+
+
 # ── DB upsert ─────────────────────────────────────────────────────────────────
 def upsert_signal(
-    ticker: str, metrics: dict, score: int, components: dict,
+    ticker: str, metrics: dict, score: int,
     tier: str, lifecycle: str,
     company_name: str | None, sector: str | None,
-    is_pead: bool, is_smd: bool,
+    is_pead: bool,
     score_3d_delta: int | None, score_trend: str,
     entry_date_val: str, is_reentry: bool, reentry_gap: int | None,
     rs_52w_percentile: int | None,
     base_count: int = 1,
     signal_date_override: str | None = None,
 ) -> str | None:
-
     sig_date = signal_date_override or TODAY
+    stage = metrics.get("weinstein_stage", "LATE_STAGE_2")
+
     row = {
         "ticker":                    ticker,
         "company_name":              company_name,
         "sector":                    sector,
         "signal_date":               sig_date,
         "stage2_score":              score,
-        # Trend
+        # Weinstein conditions (repurposed columns)
         "above_50sma":               metrics.get("above_50sma", False),
         "sma50_above_ema150":        metrics.get("sma50_above_ema150", False),
         "ema150_above_sma200":       metrics.get("ema150_above_sma200", False),
         "above_200sma":              metrics.get("above_200sma", False),
         "sma200_slope":              metrics.get("sma200_slope"),
-        "stage2_subtype":            metrics.get("stage2_subtype"),
-        # Stage duration
+        "stage2_subtype":            stage,
         "days_in_stage2":            metrics.get("days_in_stage2"),
         "ema150_distance_pct":       metrics.get("ema150_distance_pct"),
         "ema150_slope":              metrics.get("ema150_slope"),
         "base_20d_distance_pct":     metrics.get("base_20d_distance_pct"),
-        # v3.0 Volatility
+        # Minervini radar (stored in legacy VCP/vol columns)
         "hl_depth_20d":              metrics.get("hl_depth_20d"),
         "vol_5d_vs_50d_ratio":       metrics.get("vol_5d_vs_50d_ratio"),
-        # v3.0 Pivot
         "pivot_proximity_pct":       metrics.get("pivot_proximity_pct"),
         # RS
         "rs_trend":                  metrics.get("rs_trend"),
         "rs_63d_score":              metrics.get("rs_63d_score"),
         "rs_52w_percentile":         rs_52w_percentile,
         "rs_line_new_high":          metrics.get("rs_line_new_high", False),
-        # v3.1 new metrics
+        # v3.1 kept fields
         "adr_pct":                   metrics.get("adr_pct"),
         "price_52w_position":        metrics.get("price_52w_position"),
         "base_width_weeks":          metrics.get("base_width_weeks"),
         "base_count":                base_count,
         "is_active":                 True,
-        # Legacy VCP (display)
+        # Legacy VCP
         "vcp_volume_ratio":          metrics.get("vcp_volume_ratio"),
         "vcp_adr_ratio":             metrics.get("vcp_adr_ratio"),
         "vcp_score":                 metrics.get("vcp_score", 0),
         # Volume
         "volume_multiplier":         metrics.get("volume_multiplier"),
-        "breakout_volume_ratio":     metrics.get("volume_multiplier"),
+        "breakout_volume_ratio":     metrics.get("vol_5d_vs_50d_ratio"),
         # Fundamentals
         "ttm_eps_growth":            metrics.get("ttm_eps_growth"),
         "roce":                      metrics.get("roce"),
@@ -736,12 +661,11 @@ def upsert_signal(
         "lifecycle_state":           lifecycle,
         "entry_date":                entry_date_val,
         "last_confirmed_date":       sig_date if tier in ("CONFIRMED", "EMERGING") else None,
-        # Score tracking
         "score_3d_delta":            score_3d_delta,
         "score_trend":               score_trend,
         # Flags
         "is_pead_confluence":        is_pead,
-        "is_smart_money_divergence": is_smd,
+        "is_smart_money_divergence": False,
         "is_reentry":                is_reentry,
         "reentry_gap_days":          reentry_gap,
     }
@@ -767,24 +691,25 @@ def upsert_signal(
 
 
 # ── Telegram ───────────────────────────────────────────────────────────────────
-def send_telegram(confirmed: list, emerging: list) -> None:
+def send_telegram(early_s2: list, late_s2: list, stage1: list) -> None:
     if not TG_TOKEN or not TG_CHAT_ID:
         return
     lines = [
-        f"Stage 2 Engine v3.0 — {dt.now().strftime('%d %b %Y')}",
-        f"Rubric: Weinstein+Minervini | CONFIRMED≥85 | EMERGING 70-84",
+        f"Stage 2 Engine v4.0 — Pure Weinstein — {dt.now().strftime('%d %b %Y')}",
+        f"Primary: Weekly OHLCV | Minervini: Radar only",
     ]
-    if confirmed:
-        lines.append(f"\nCONFIRMED (85+) — {len(confirmed)} stocks")
-        for s in sorted(confirmed, key=lambda x: x["score"], reverse=True)[:8]:
+    if early_s2:
+        lines.append(f"\n🟢 EARLY STAGE 2 (Prime Buy) — {len(early_s2)} stocks")
+        for s in sorted(early_s2, key=lambda x: x["rs"], reverse=True)[:8]:
             lines.append(
-                f"  {s['ticker']} [{s.get('subtype','')[:5]}] "
-                f"score={s['score']} {s['state']} d={s['days']} RS={s.get('rs52','?')}%ile"
+                f"  {s['ticker']} | RS={s['rs']:+.0f} | Vol={s['vol']:.1f}x | Wks={s['wks']}"
             )
-    if emerging:
-        lines.append(f"\nEMERGING (70-84) — {len(emerging)} stocks (top 5):")
-        for s in sorted(emerging, key=lambda x: x["score"], reverse=True)[:5]:
-            lines.append(f"  {s['ticker']} score={s['score']} {s.get('subtype','')}")
+    if late_s2:
+        lines.append(f"\n🔵 LATE STAGE 2 (Hold/Add) — {len(late_s2)} stocks (top 5):")
+        for s in sorted(late_s2, key=lambda x: x["wks"], reverse=True)[:5]:
+            lines.append(f"  {s['ticker']} | {s['wks']}wks | RS={s['rs']:+.0f}")
+    if stage1:
+        lines.append(f"\n⚪ STAGE 1 BASING (Watchlist) — {len(stage1)} stocks")
     try:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
@@ -798,88 +723,126 @@ def send_telegram(confirmed: list, emerging: list) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
-    print(f"=== Stage 2 Engine v3.0 — {TODAY} ===")
-    print("Rubric: Weinstein+Minervini | 30+20+20+15+15 | CONFIRMED≥85 | EMERGING 70-84")
+    print(f"=== Stage 2 Engine v4.0 — Pure Weinstein — {TODAY} ===")
+    print("Primary: Weekly OHLCV | Minervini: Radar badges only")
 
     tickers = get_universe_tickers()
     print(f"[universe] {len(tickers)} tickers to scan")
 
-    print("[benchmark] fetching Nifty Total Market...")
-    bench_hist = None
+    # Benchmark weekly data
+    print(f"[benchmark] fetching {BENCHMARK} weekly...")
+    bench_weekly = None
     try:
-        bench_hist = yf.Ticker(BENCHMARK).history(period="2y", interval="1d", auto_adjust=True)
+        bench_weekly = yf.Ticker(BENCHMARK).history(period="5y", interval="1wk", auto_adjust=True)
         time.sleep(1)
+        print(f"[benchmark] {len(bench_weekly)} weekly candles")
     except Exception as e:
         print(f"[benchmark] {e}")
 
     pead_set    = get_pead_high_scorers()
     history     = get_recent_signal_history()
     base_counts = get_base_counts()
-    print(f"[pead] {len(pead_set)} | [history] {len(history)} | [base_counts] {len(base_counts)} tickers")
+    print(f"[pead] {len(pead_set)} | [history] {len(history)} | [base_counts] {len(base_counts)}")
 
-    # Pass 1: download + filter + collect 52W raw returns
-    print("[pass1] downloading and analysing...")
-    results_map: dict[str, tuple[dict, pd.DataFrame]] = {}
+    # Pass 1: weekly analysis — classify stage for all tickers
+    print("[pass1] weekly analysis...")
+    results_map: dict[str, dict] = {}       # ticker → metrics
     rs_52w_raw_map: dict[str, float] = {}
 
     for i, ticker in enumerate(tickers, 1):
         ns = ticker if ticker.endswith(".NS") else ticker + ".NS"
         print(f"[{i}/{len(tickers)}] {ns}", end="  ")
         try:
-            t    = yf.Ticker(ns)
-            hist = t.history(period="2y", interval="1d", auto_adjust=True)
-            time.sleep(0.5)
+            t_obj    = yf.Ticker(ns)
+            wk_hist  = t_obj.history(period="5y", interval="1wk", auto_adjust=True)
+            time.sleep(0.4)
         except Exception as e:
             print(f"-> dl_fail: {e}")
             continue
 
-        metrics = analyse(hist, bench_hist, t)
+        metrics = analyse_weekly(wk_hist, bench_weekly)
         if metrics is None:
-            print("-> skip")
+            print("-> skip (data/liquidity)")
             continue
 
-        results_map[ticker] = (metrics, hist)
+        stage = metrics["weinstein_stage"]
+        if stage not in STAGES_TO_STORE:
+            print(f"-> {stage} (not stored)")
+            continue
+
+        results_map[ticker] = metrics
         rs_52w_raw_map[ticker] = metrics["rs_52w_raw"]
         print(
-            f"-> PASS | HL={metrics['hl_depth_20d']:.1f}% "
-            f"piv={metrics['pivot_proximity_pct']:+.1f}% "
-            f"vol5d={metrics['vol_5d_vs_50d_ratio']:.2f}x "
-            f"{metrics['stage2_subtype']}"
+            f"-> {stage} | slope={metrics['sma200_slope']:+.4f} "
+            f"vol={metrics['vol_5d_vs_50d_ratio']:.2f}x "
+            f"RS={metrics['rs_63d_score']:+.1f} "
+            f"wks={metrics['days_in_stage2']}"
         )
 
-    # Compute 52W percentile across qualifying stocks
+    print(f"\n[pass1] {len(results_map)} qualifying tickers")
+
+    # Pass 2: daily fetch for Minervini radar + fundamentals + company info
+    print("[pass2] daily radar + fundamentals...")
+    for ticker, metrics in results_map.items():
+        ns = ticker if ticker.endswith(".NS") else ticker + ".NS"
+        try:
+            t_obj    = yf.Ticker(ns)
+            day_hist = t_obj.history(period="1y", interval="1d", auto_adjust=True)
+            time.sleep(0.4)
+            radar = compute_minervini_radar(day_hist)
+            metrics.update(radar)
+            fund  = get_fundamentals(t_obj)
+            metrics.update(fund)
+            info  = t_obj.info
+            metrics["company_name"] = info.get("longName") or info.get("shortName")
+            metrics["sector"]       = info.get("sector")
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"  [pass2] {ticker}: {e}")
+            metrics["company_name"] = None
+            metrics["sector"]       = None
+
+    # 52W percentile ranking across qualifying stocks
     print(f"\n[percentile] ranking {len(rs_52w_raw_map)} tickers...")
-    sorted_tk  = sorted(rs_52w_raw_map, key=lambda t: rs_52w_raw_map[t])
-    n          = len(sorted_tk)
-    pct_map    = {tk: int(rank / n * 100) for rank, tk in enumerate(sorted_tk, 1)}
+    sorted_tk = sorted(rs_52w_raw_map, key=lambda t: rs_52w_raw_map[t])
+    n         = len(sorted_tk)
+    pct_map   = {tk: int(rank / n * 100) for rank, tk in enumerate(sorted_tk, 1)}
 
-    # Pass 2: score, lifecycle, upsert
-    print("[pass2] scoring and upserting...")
-    confirmed_list, emerging_list = [], []
+    # Pass 3: score → lifecycle → upsert
+    print("[pass3] scoring and upserting...")
+    early_list, late_list, stage1_list = [], [], []
 
-    for ticker, (metrics, hist) in results_map.items():
+    for ticker, metrics in results_map.items():
+        stage      = metrics["weinstein_stage"]
+        score      = STAGE_SYNTHETIC_SCORES.get(stage, 0)
+        tier       = STAGE_TIERS.get(stage, "WATCHING")
         rs_52w_pct = pct_map.get(ticker)
         metrics["rs_52w_percentile"] = rs_52w_pct
 
-        score, components = compute_stage2_score(metrics)
-        if score == 0:
-            continue   # shouldn't happen (hard filters match knockout), but safe guard
+        # Lifecycle context from DB history
+        ticker_hist  = history.get(ticker, [])
+        prev_stage   = ticker_hist[-1].get("stage2_subtype") if ticker_hist else None
+        prev_score_5d = None
+        hist_5d = [h for h in ticker_hist
+                   if h.get("signal_date") == (date.today() - timedelta(days=5)).isoformat()]
+        if hist_5d:
+            prev_score_5d = hist_5d[0]["stage2_score"]
 
-        tier = tier_from_score(score)
+        lifecycle = lifecycle_from_stage(
+            stage, metrics["days_in_stage2"], prev_stage, prev_score_5d
+        )
 
-        # Lifecycle context
-        ticker_hist    = history.get(ticker, [])
-        confirmed_days = sum(1 for h in ticker_hist if h.get("lifecycle_state") == "CONFIRMED")
-
+        # Score trend (vs 3 days ago)
         score_3d_delta, score_trend = None, "NEUTRAL"
         hist_3d = [h for h in ticker_hist
                    if h.get("signal_date") == (date.today() - timedelta(days=3)).isoformat()]
         if hist_3d:
             old = hist_3d[0]["stage2_score"]
             score_3d_delta = score - old
-            if score_3d_delta >= 8:   score_trend = "STRENGTHENING"
-            elif score_3d_delta <= -8: score_trend = "WEAKENING"
+            if score_3d_delta >= 15:   score_trend = "STRENGTHENING"
+            elif score_3d_delta <= -15: score_trend = "WEAKENING"
 
+        # Entry date tracking
         earliest = min(
             (h.get("entry_date") or h.get("signal_date") for h in ticker_hist
              if h.get("entry_date") or h.get("signal_date")),
@@ -887,6 +850,7 @@ def main():
         )
         entry_date_val = earliest or TODAY
 
+        # Re-entry detection
         last_states = [h.get("lifecycle_state") for h in ticker_hist]
         is_reentry  = "EXITED" in last_states and entry_date_val == TODAY
         reentry_gap = None
@@ -896,95 +860,81 @@ def main():
                     reentry_gap = (date.today() - date.fromisoformat(h["signal_date"])).days
                     break
 
-        prev_score_5d = None
-        hist_5d = [h for h in ticker_hist
-                   if h.get("signal_date") == (date.today() - timedelta(days=5)).isoformat()]
-        if hist_5d:
-            prev_score_5d = hist_5d[0]["stage2_score"]
-
-        lifecycle = lifecycle_from_context(
-            score, prev_score_5d, confirmed_days,
-            above_50sma=metrics.get("above_50sma", True),
-            above_150ema=True,
-        )
+        # Transition log
+        last_hist    = ticker_hist[-1] if ticker_hist else None
+        prev_lc      = last_hist.get("lifecycle_state") if last_hist else None
+        write_transition(ticker, prev_stage, stage, prev_lc, lifecycle, metrics["close"])
 
         is_pead = ticker in pead_set or (ticker + ".NS") in pead_set
-        is_smd  = (
-            (metrics.get("ttm_eps_growth") or 0) < 0 and
-            (metrics.get("volume_multiplier") or 0) >= 3.0 and
-            score >= 70
-        )
-        if is_reentry:
-            score = min(100, score + 2)
-
-        # Transitions: log sub-type or lifecycle state changes
-        last_hist = ticker_hist[-1] if ticker_hist else None
-        prev_subtype  = last_hist.get("stage2_subtype") if last_hist else None
-        prev_lc_state = last_hist.get("lifecycle_state") if last_hist else None
-        write_transition(ticker, prev_subtype, metrics.get("stage2_subtype"),
-                         prev_lc_state, lifecycle, metrics["close"])
-
         base_count_val = base_counts.get(ticker, 0) + 1
 
-        # Company info
-        company_name = sector = None
-        try:
-            ns   = ticker if ticker.endswith(".NS") else ticker + ".NS"
-            info = yf.Ticker(ns).info
-            company_name = info.get("longName") or info.get("shortName")
-            sector       = info.get("sector")
-            time.sleep(0.3)
-        except Exception:
-            pass
-
         upsert_signal(
-            ticker, metrics, score, components, tier, lifecycle,
-            company_name, sector, is_pead, is_smd,
-            score_3d_delta, score_trend,
+            ticker, metrics, score, tier, lifecycle,
+            metrics.get("company_name"), metrics.get("sector"),
+            is_pead, score_3d_delta, score_trend,
             entry_date_val, is_reentry, reentry_gap,
             rs_52w_pct, base_count_val,
         )
 
-        subtype = metrics.get("stage2_subtype", "")
-        t_out = components["trend"]
-        f_out = components["fundamental"]
-        v_out = components["volatility"]
-        p_out = components["pivot"]
-        r_out = components["rs"]
         print(
-            f"  {ticker}: {score}pt [{tier}] {lifecycle} | "
-            f"T={t_out} F={f_out} V={v_out} P={p_out} RS={r_out} | "
-            f"HL={metrics['hl_depth_20d']:.1f}% piv={metrics['pivot_proximity_pct']:+.1f}% "
-            f"vol={metrics['vol_5d_vs_50d_ratio']:.2f}x RS52={rs_52w_pct}%ile | {subtype}"
+            f"  {ticker}: {stage} [{tier}] {lifecycle} | "
+            f"slope={metrics['sma200_slope']:+.4f} vol={metrics['vol_5d_vs_50d_ratio']:.2f}x "
+            f"RS={metrics['rs_63d_score']:+.1f} wks={metrics['days_in_stage2']} "
+            f"radar_stacked={metrics.get('rs_line_new_high', False)}"
         )
 
         d = {
-            "ticker": ticker, "score": score, "state": lifecycle,
-            "days": metrics["days_in_stage2"], "vol": metrics.get("volume_multiplier", 0),
-            "subtype": subtype, "rs52": rs_52w_pct,
+            "ticker": ticker, "wks": metrics["days_in_stage2"],
+            "vol": metrics["vol_5d_vs_50d_ratio"],
+            "rs": metrics["rs_63d_score"],
         }
-        if score >= 85:
-            confirmed_list.append(d)
-        elif score >= 70:
-            emerging_list.append(d)
+        if stage == "EARLY_STAGE_2":   early_list.append(d)
+        elif stage == "LATE_STAGE_2":  late_list.append(d)
+        else:                          stage1_list.append(d)
 
     print(
-        f"\n[done] {len(results_map)} qualified | "
-        f"{len(confirmed_list)} CONFIRMED | {len(emerging_list)} EMERGING"
+        f"\n[done] {len(results_map)} stored | "
+        f"EARLY={len(early_list)} | LATE={len(late_list)} | STAGE1={len(stage1_list)}"
     )
 
-    # Mark all non-today signals as inactive, today's as active
+    # Mark old signals inactive
     try:
         cutoff_90d = (date.today() - timedelta(days=90)).isoformat()
         sb.table("stage2_signals").update({"is_active": False}) \
           .gte("signal_date", cutoff_90d).neq("signal_date", TODAY).execute()
         sb.table("stage2_signals").update({"is_active": True}) \
           .eq("signal_date", TODAY).execute()
-        print(f"[is_active] activated {len(confirmed_list)+len(emerging_list)} signals from {TODAY}")
+        print(f"[is_active] marked {len(results_map)} signals active for {TODAY}")
     except Exception as e:
         print(f"[is_active] {e}")
 
-    send_telegram(confirmed_list, emerging_list)
+    send_telegram(early_list, late_list, stage1_list)
+
+
+# ── Compat aliases for backfill script ────────────────────────────────────────
+def compute_stage2_score(metrics: dict) -> tuple[int, dict]:
+    """Compat shim: return synthetic score and empty components."""
+    stage = metrics.get("weinstein_stage", "STAGE_4_DECLINING")
+    score = STAGE_SYNTHETIC_SCORES.get(stage, 0)
+    return score, {"trend": 0, "fundamental": 0, "volatility": 0, "pivot": 0, "rs": 0}
+
+def tier_from_score(score: int) -> str:
+    if score >= 85: return "CONFIRMED"
+    if score >= 70: return "EMERGING"
+    return "NONE"
+
+def get_stage2_subtype(sma50: float, sma200: float) -> str:
+    return "LATE_STAGE_2"
+
+def lifecycle_from_context(score, prev5d, days_confirmed, above_50sma, above_150ema):
+    if not above_150ema: return "EXITED"
+    if score >= 85: return "CONFIRMED"
+    if score >= 70: return "EMERGING"
+    return "WATCHING"
+
+RS_PERIOD  = 63
+EMA_PERIOD = 150
+VOL_SMA    = 20
 
 
 if __name__ == "__main__":
