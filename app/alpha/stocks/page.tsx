@@ -104,7 +104,7 @@ export default function AlphaStocksPage() {
         const r = await fetch(`${VPS}/alpha/ingest-status?ticker=${encodeURIComponent(t)}`, { cache: 'no-store' });
         const d = await r.json();
         const docs = d.docs_ingested ?? 0;
-        if (d.status === 'done' || d.ingestion_complete) {
+        if (d.status === 'done') {
           // Use last_log run summary if it contains ingest result; fall back to total count
           const runSummary = d.last_log && d.last_log.includes('ingested')
             ? d.last_log.trim()
@@ -112,7 +112,10 @@ export default function AlphaStocksPage() {
           setIngestState(s => ({ ...s, [t]: { running: false, status: 'done', docs, msg: runSummary } }));
           loadStocks();
         } else {
-          setIngestState(s => ({ ...s, [t]: { running: true, status: 'running', docs, msg: docs > 0 ? `Ingesting… ${docs} docs found` : 'Fetching documents from NSE…' } }));
+          const msg = d.status === 'running'
+            ? (d.last_log?.includes('Ingesting') || docs > 0 ? `Ingesting… ${docs} docs found` : 'Fetching documents from NSE…')
+            : (docs > 0 ? `${docs} docs in library` : 'Fetching documents from NSE…');
+          setIngestState(s => ({ ...s, [t]: { running: true, status: 'running', docs, msg } }));
           pollIngestStatus(t, attempts + 1);
         }
       } catch {
