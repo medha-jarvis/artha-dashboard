@@ -120,12 +120,16 @@ export default function AlphaStocksPage() {
 
   const triggerIngest = async (t: string) => {
     if (ingestState[t]?.running) return;
+    // 730d (2yr) for first ingest; 90d for re-sync when stock already has docs
+    const stock = stocks.find(s => s.ticker === t);
+    const alreadyHasDocs = (stock?.docs_ingested ?? 0) > 0 || (ingestState[t]?.docs ?? 0) > 0;
+    const daysBack = alreadyHasDocs ? 90 : 730;
     setIngestState(s => ({ ...s, [t]: { running: true, status: 'running', docs: 0, msg: 'Starting…' } }));
     try {
       const r = await fetch(`${VPS}/trigger/alpha-ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: t, days_back: 180 }),
+        body: JSON.stringify({ ticker: t, days_back: daysBack }),
       });
       const d = await r.json();
       if (!d.ok) {
