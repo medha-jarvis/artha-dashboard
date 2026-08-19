@@ -105,7 +105,11 @@ export default function AlphaStocksPage() {
         const d = await r.json();
         const docs = d.docs_ingested ?? 0;
         if (d.status === 'done' || d.ingestion_complete) {
-          setIngestState(s => ({ ...s, [t]: { running: false, status: 'done', docs, msg: `Done — ${docs} doc${docs !== 1 ? 's' : ''} ingested & extracted` } }));
+          // Use last_log for run summary (shows new docs + filtered count); fall back to total
+          const runSummary = d.last_log && d.last_log.includes('Done —')
+            ? d.last_log.replace(/^.*Done —/, 'Done —').trim()
+            : `Done — ${docs} doc${docs !== 1 ? 's' : ''} in library`;
+          setIngestState(s => ({ ...s, [t]: { running: false, status: 'done', docs, msg: runSummary } }));
           loadStocks();
         } else {
           setIngestState(s => ({ ...s, [t]: { running: true, status: 'running', docs, msg: docs > 0 ? `Ingesting… ${docs} docs found` : 'Fetching documents from NSE…' } }));
