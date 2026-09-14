@@ -1,7 +1,7 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Eye, RefreshCw, AlertCircle, TrendingUp, TrendingDown, ChevronUp, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Eye, RefreshCw, AlertCircle, TrendingUp, TrendingDown, ChevronUp, ChevronDown, Clock } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
 const sb = (p: string) => fetch(`/api/sb/${p}`, { cache: 'no-store' }).then(r => r.json());
@@ -24,6 +24,8 @@ export default function InsiderPage() {
   const [filter,setF] = useState<Filter>('all');
   const [triggering,setT] = useState(false);
   const [msg,setM] = useState('');
+  const [countdown,setCountdown] = useState(0);
+  const cdRef = useRef<ReturnType<typeof setInterval>|null>(null);
 
   const load = async () => { setL(true); setE('');
     try {
@@ -33,13 +35,18 @@ export default function InsiderPage() {
     } catch(e:unknown) { setE(e instanceof Error?e.message:'Failed'); }
     finally { setL(false); }
   };
-  useEffect(()=>{load();},[]);
+  useEffect(()=>{load(); return ()=>{ if(cdRef.current) clearInterval(cdRef.current); };},[]);
 
   const dispatch = async () => { setT(true); setM('');
+    if(cdRef.current){clearInterval(cdRef.current);setCountdown(0);}
     try {
       const r = await fetch('/api/insider-trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
       const d = await r.json();
-      setM(d.ok?`✓ ${d.message}`:`✗ ${d.error}`);
+      if(d.ok){
+        setM(`✓ Engine launched on VPS (PID ${d.pid}) — auto-refreshing in ~3m`);
+        let secs=210; setCountdown(secs);
+        cdRef.current=setInterval(()=>{secs--;setCountdown(secs);if(secs<=0){clearInterval(cdRef.current!);cdRef.current=null;setCountdown(0);load();}},1000);
+      } else { setM(`✗ ${d.error}`); }
     } catch { setM('✗ Network error'); }
     finally { setT(false); }
   };
@@ -65,6 +72,10 @@ export default function InsiderPage() {
   const hc=sigs.filter(s=>s.insider_score>=75).length;
   const clusters=sigs.filter(s=>s.cluster_trade_flag).length;
   const fmtDate=(s:string)=>new Date(s).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+  const maxDate = sigs.length>0 ? sigs.reduce((m,s)=>s.signal_date>m?s.signal_date:m, sigs[0].signal_date) : null;
+  const daysStale = maxDate ? Math.floor((Date.now()-new Date(maxDate+'T00:00:00Z').getTime())/86400000) : 0;
+  const fmtEma=(v:number|null)=>v==null?'—':`${v>=0?'+':''}${v.toFixed(1)}%`;
+  const emaCls=(v:number|null)=>v==null?'text-slate-600':v<0?'text-red-400':v<=10?'text-emerald-400':'text-amber-400';
 
   return (
     <div className="min-h-screen bg-[#0d1117] p-3 md:p-5">
@@ -75,12 +86,25 @@ export default function InsiderPage() {
             <p className="text-xs text-slate-500 ml-11">NSE PIT disclosures — Promoters & Directors · Open-market trades only · 6 PM IST daily</p>
           </div>
           <div className="flex gap-2">
-            <button onClick={dispatch} disabled={triggering} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white rounded text-xs font-semibold disabled:opacity-50 transition"><Eye className={`w-3.5 h-3.5 ${triggering?'animate-pulse':''}`}/>⚡ Run Engine</button>
+            <button onClick={dispatch} disabled={triggering||countdown>0} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white rounded text-xs font-semibold disabled:opacity-50 transition">
+              {countdown>0?<><Clock className="w-3.5 h-3.5 animate-pulse"/>{Math.floor(countdown/60)}m{countdown%60}s</>:<><Eye className={`w-3.5 h-3.5 ${triggering?'animate-pulse':''}`}/>⚡ Run Engine</>}
+            </button>
             <button onClick={load} disabled={loading} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${loading?'animate-spin':''}`}/></button>
           </div>
         </div>
-        {msg&&<div className={`text-xs px-4 py-2.5 rounded-lg border ${msg.startsWith('✓')?'bg-emerald-900/30 border-emerald-700/40 text-emerald-300':'bg-red-900/30 border-red-700/40 text-red-300'}`}>{msg}</div>}
+        {msg&&<div className={`text-xs px-4 py-2.5 rounded-lg border ${msg.startsWith('✓')?'bg-emerald-900/30 border-emerald-700/40 text-emerald-300':'bg-red-900/30 border-red-700/40 text-red-300'}`}>
+          {msg}{countdown>0&&<span className="ml-2 opacity-60">({Math.floor(countdown/60)}m {countdown%60}s)</span>}
+        </div>}
         {error&&<div className="flex items-center gap-2 bg-red-900/30 border border-red-700/40 rounded-lg p-3 text-red-300 text-xs"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
+        {maxDate&&daysStale>30&&(
+          <div className="flex items-start gap-2.5 bg-amber-900/20 border border-amber-700/40 rounded-lg p-3">
+            <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5"/>
+            <div className="text-xs text-amber-200">
+              <span className="font-semibold text-amber-300">Data frozen since {fmtDate(maxDate)}</span>
+              {' '}({daysStale} days ago) — NSE migrated PIT disclosures to XBRL format in Q1 FY27. The legacy <code className="text-amber-400 bg-amber-900/40 px-1 rounded">corporates-pit</code> API stopped receiving new filings after April 2026. Engine runs are checking for new data daily; will auto-update when NSE restores the feed.
+            </div>
+          </div>
+        )}
         {sigs.length>0&&<div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           {[{l:'🟢 BUY Signals',v:buys,c:'text-emerald-400'},{l:'🔴 SELL Signals',v:sells,c:'text-red-400'},{l:'🎯 High Conv (≥75)',v:hc,c:'text-violet-400'},{l:'🔗 Cluster Trades',v:clusters,c:'text-amber-400'}].map(s=>(
             <div key={s.l} className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center"><div className="text-[10px] text-slate-500 mb-1 whitespace-nowrap">{s.l}</div><div className={`text-lg font-black ${s.c}`}>{s.v}</div></div>
@@ -146,7 +170,7 @@ export default function InsiderPage() {
                         <td className="px-3 py-2.5 whitespace-nowrap text-slate-300 truncate max-w-[160px]">{s.acquirer_name}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap text-slate-300 font-medium">{s.trade_value_in_cr!=null?`₹${s.trade_value_in_cr.toFixed(1)}Cr`:'—'}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap text-slate-400">{s.equity_pct_traded!=null?`${s.equity_pct_traded.toFixed(3)}%`:'—'}</td>
-                        <td className={`px-3 py-2.5 text-right whitespace-nowrap ${s.ema150_distance_pct==null?'text-slate-600':s.ema150_distance_pct<=10?'text-emerald-400':'text-amber-400'}`}>{s.ema150_distance_pct!=null?`+${s.ema150_distance_pct.toFixed(1)}%`:'—'}</td>
+                        <td className={`px-3 py-2.5 text-right whitespace-nowrap ${emaCls(s.ema150_distance_pct)}`}>{fmtEma(s.ema150_distance_pct)}</td>
                         <td className="px-3 py-2.5 text-center whitespace-nowrap">{s.cluster_trade_flag?<span className="text-[10px] font-bold bg-violet-500/20 text-violet-400 border border-violet-500/30 px-1.5 py-0.5 rounded">🔗 YES</span>:<span className="text-slate-700">—</span>}</td>
                       </tr>
                     );

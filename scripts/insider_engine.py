@@ -284,10 +284,15 @@ def get_latest_db_date() -> str:
 
 
 def main():
-    print(f"=== Insider Engine v2 — {TODAY} ===")
+    print(f"=== Insider Engine v3 — {TODAY} ===")
     session = get_nse_session()
-    # NSE PIT has ~60-90 day lag; use 150-day window to reliably capture latest available data
-    records = fetch_pit_recent(session, days=150)
+    # NSE PIT: use 30-day rolling window for fresh data; falls back to max available
+    records = fetch_pit_recent(session, days=30)
+
+    # If recent window empty, widen to 150 days to check if API has any data at all
+    if not records:
+        print("[main] 30-day window empty — widening to 150 days to check API health")
+        records = fetch_pit_recent(session, days=150)
 
     if not records:
         print("[main] no PIT data — check Indian IP (VPS) and NSE availability")
@@ -299,6 +304,22 @@ def main():
 
     parsed = [p for rec in records if (p := parse_record(rec)) and p["ticker"]]
     print(f"[filter] {len(parsed)} qualifying trades (≥₹50L, promoter/director, market)")
+
+    # Early-exit if all fetched trades are already stored — avoids wasteful yfinance calls
+    if parsed:
+        max_fetched = max(p["signal_date"] for p in parsed)
+        print(f"[main] newest qualifying trade in NSE response: {max_fetched}")
+        if max_fetched <= last_known_date:
+            days_frozen = (date.today() - date.fromisoformat(last_known_date)).days
+            print(f"[main] NSE PIT API frozen since {last_known_date} ({days_frozen}d ago)")
+            print(f"[main] known gap: NSE migrated PIT disclosures to XBRL format post-April 2026")
+            print(f"[main] no new signals — exiting cleanly, DB is up to date with available data")
+            return
+    else:
+        days_frozen = (date.today() - date.fromisoformat(last_known_date)).days
+        print(f"[main] NSE returned {len(records)} records but 0 qualify after filtering")
+        print(f"[main] last DB signal: {last_known_date} ({days_frozen}d ago)")
+        return
 
     alerts, processed = [], 0
     for p in parsed:
@@ -352,7 +373,9 @@ def main():
                            "acquirer": p["acquirer_name"], "val": p["trade_value_cr"],
                            "score": score, "tier": tier})
 
-    print(f"\n[done] {processed} signals stored | {len(alerts)} HIGH CONVICTION alerts")
+    print(f"\n[done] {processed} new signals stored | {len(alerts)} HIGH CONVICTION alerts")
+    if processed == 0:
+        print("[done] note: 0 new signals — all qualifying trades already in DB")
     send_telegram(alerts)
 
 
