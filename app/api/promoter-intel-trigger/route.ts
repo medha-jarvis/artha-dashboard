@@ -9,8 +9,10 @@ export async function POST(_req: NextRequest) {
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
-    const data = await r.json();
-    if (!r.ok) return NextResponse.json({ ok: false, error: data.error || `VPS ${r.status}` }, { status: 500 });
+    const text = await r.text();
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(text); } catch { data = { error: `VPS ${r.status}: ${text.slice(0, 120)}` }; }
+    if (!r.ok) return NextResponse.json({ ok: false, error: (data.error as string) || `VPS ${r.status}` }, { status: 500 });
     return NextResponse.json(data);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Unknown error';
