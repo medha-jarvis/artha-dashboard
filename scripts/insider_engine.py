@@ -133,7 +133,7 @@ def get_technicals(ticker: str) -> dict:
     if ticker in _tech_cache:
         return _tech_cache[ticker]
     ns = ticker if ticker.endswith(".NS") else ticker + ".NS"
-    out = dict(ema150_dist=None, shares_out=None, base_price=None)
+    out = dict(ema150_dist=None, shares_out=None, base_price=None, market_cap_cr=None)
     try:
         t    = yf.Ticker(ns)
         hist = t.history(period="300d", interval="1d", auto_adjust=True)
@@ -146,6 +146,9 @@ def get_technicals(ticker: str) -> dict:
         out["ema150_dist"] = round((last_c - ema150) / ema150 * 100, 2)
         out["base_price"]  = round(last_c, 2)
         out["shares_out"]  = t.info.get("sharesOutstanding") or t.info.get("impliedSharesOutstanding")
+        mcap = t.info.get("marketCap")
+        if mcap:
+            out["market_cap_cr"] = round(mcap / 1e7, 2)
     except Exception as e:
         print(f"  [tech] {ns}: {e}")
     _tech_cache[ticker] = out
